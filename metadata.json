@@ -1,0 +1,5 @@
+{
+  "name": "Vermögens-Simulator DE",
+  "description": "Ein interaktives Tool zur Simulation von Vermögensaufbau und Dividendenstrategien unter Berücksichtigung deutscher Steuerregeln, Inflation und dynamischer Sparraten.",
+  "requestFramePermissions": []
+}
