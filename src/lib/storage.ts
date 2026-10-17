@@ -15,18 +15,19 @@ export function sanitize(input: unknown): SimulationConfig {
     const def = base[key];
     const val = src[key];
     if (val === undefined) continue;
-    if (key === 'goal') {
+    if (key === 'goal' || key === 'withdrawal') {
       const g = (val && typeof val === 'object' ? val : {}) as Record<string, unknown>;
-      const goal: Record<string, unknown> = { ...base.goal };
-      for (const gk of Object.keys(base.goal) as (keyof SimulationConfig['goal'])[]) {
+      const nestedBase = base[key] as unknown as Record<string, unknown>;
+      const nested: Record<string, unknown> = { ...nestedBase };
+      for (const gk of Object.keys(nestedBase)) {
         const gv = g[gk];
-        const gd = base.goal[gk];
+        const gd = nestedBase[gk];
         if (gv === undefined) continue;
         if (gd === null || typeof gd === 'number') {
-          if (gv === null || (typeof gv === 'number' && Number.isFinite(gv))) goal[gk] = gv;
-        } else if (typeof gv === typeof gd) goal[gk] = gv;
+          if (gv === null || (typeof gv === 'number' && Number.isFinite(gv))) nested[gk] = gv;
+        } else if (typeof gv === typeof gd) nested[gk] = gv;
       }
-      out.goal = goal;
+      out[key] = nested;
     } else if (Array.isArray(def)) {
       if (Array.isArray(val)) {
         out[key] = val
@@ -51,6 +52,10 @@ export function sanitize(input: unknown): SimulationConfig {
   if (![0, 8, 9].includes(cfg.churchTax)) cfg.churchTax = 0;
   if (!['equity', 'mixed', 'other'].includes(cfg.fundType)) cfg.fundType = 'equity';
   if (!['years', 'age'].includes(cfg.durationMode)) cfg.durationMode = 'years';
+  if (!['fixed', 'rate'].includes(cfg.withdrawal.mode)) cfg.withdrawal.mode = 'fixed';
+  // Older saves used a yes/no switch for reinvesting
+  if (src.dividendStrategy === undefined && src.reinvestDividends === false) cfg.dividendStrategy = 'payout';
+  if (!['reinvest', 'payout', 'withWithdrawal', 'fromYear'].includes(cfg.dividendStrategy)) cfg.dividendStrategy = 'reinvest';
   return cfg;
 }
 

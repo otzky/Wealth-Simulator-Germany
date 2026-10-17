@@ -1,7 +1,7 @@
 import { useId, useMemo } from 'react';
-import { CalendarClock, Coins, Landmark, Plus, Receipt, Target, Trash2, TrendingUp } from 'lucide-react';
+import { CalendarClock, Coins, HandCoins, Landmark, Plus, Receipt, Target, Trash2, TrendingUp } from 'lucide-react';
 import type { LumpSum, SavingsStep, SimulationConfig } from '../types';
-import { PARTIAL_EXEMPTION, effectiveTaxRate, simulationYears } from '../lib/simulation';
+import { PARTIAL_EXEMPTION, effectiveTaxRate, parseDate, reinvestsIn, simulationYears } from '../lib/simulation';
 import { formatEuro, formatNumber, formatPercent } from '../lib/format';
 import { newId } from '../lib/storage';
 import { Field, IconButton, NumberField, NumberInput, Section, Segmented, Select, SliderField, Switch, TextInput } from './ui';
@@ -124,6 +124,8 @@ export default function SettingsPanel({ config, onChange }: Props) {
         </ListBlock>
       </Section>
 
+      <WithdrawalSection config={config} onChange={onChange} yearOptions={yearOptions} />
+
       <Section
         icon={<TrendingUp size={16} />}
         title="Markt"
@@ -152,12 +154,35 @@ export default function SettingsPanel({ config, onChange }: Props) {
           suffix="%"
           inputMax={30}
         />
-        <Switch
-          label="Ausschüttungen reinvestieren"
-          description={config.reinvestDividends ? 'Netto-Dividenden fließen zurück ins Depot.' : 'Netto-Dividenden werden ausgezahlt.'}
-          checked={config.reinvestDividends}
-          onChange={(v) => onChange({ reinvestDividends: v })}
-        />
+        <Field
+          label="Ausschüttungen"
+          hint="Reinvestierte Dividenden lassen das Depot weiter wachsen. Ausgezahlte Dividenden landen auf deinem Konto und stehen dir als Einkommen zur Verfügung."
+        >
+          <Select
+            aria-label="Umgang mit Ausschüttungen"
+            value={config.dividendStrategy}
+            onChange={(v) => onChange({ dividendStrategy: v })}
+            options={[
+              { value: 'reinvest', label: 'Immer reinvestieren' },
+              { value: 'payout', label: 'Immer auszahlen' },
+              { value: 'withWithdrawal', label: 'Ab Entnahmebeginn auszahlen' },
+              { value: 'fromYear', label: 'Ab einem Jahr auszahlen' },
+            ]}
+          />
+        </Field>
+        {config.dividendStrategy === 'fromYear' && (
+          <Field label="Auszahlen ab">
+            <Select
+              aria-label="Dividenden auszahlen ab"
+              value={config.dividendPayoutYear}
+              onChange={(v) => onChange({ dividendPayoutYear: v })}
+              options={withValue(yearOptions, config.dividendPayoutYear)}
+            />
+          </Field>
+        )}
+        {config.dividendStrategy === 'withWithdrawal' && !config.withdrawal.enabled && (
+          <p className="-mt-2 text-xs text-muted">Keine Entnahme geplant – Dividenden werden durchgehend reinvestiert.</p>
+        )}
         <SliderField
           label="Inflation p. a."
           hint="Damit wird die Kaufkraft berechnet: Was ist das Vermögen in heutigem Geld wert?"
@@ -296,13 +321,20 @@ export default function SettingsPanel({ config, onChange }: Props) {
         />
         {config.goal.enabled && (
           <>
-            <Field label="Zielvermögen am Ende">
+            <Field label={config.withdrawal.enabled ? 'Zielvermögen bei Entnahmebeginn' : 'Zielvermögen am Ende'}>
               <div className="flex gap-2">
                 <NumberInput aria-label="Zielvermögen" value={config.goal.wealth} onChange={(v) => setGoal({ wealth: v })} suffix="€" min={0} allowEmpty placeholder="z. B. 1.000.000" className="flex-1" />
                 <BasisSelect value={config.goal.wealthBasis} onChange={(v) => setGoal({ wealthBasis: v })} />
               </div>
             </Field>
-            <Field label="Netto-Dividende pro Monat" hint="Durchschnitt der letzten 12 Monate der Laufzeit, nach Steuern.">
+            <Field
+              label="Netto-Dividende pro Monat"
+              hint={
+                config.withdrawal.enabled
+                  ? 'Durchschnitt im Jahr vor Entnahmebeginn, nach Steuern.'
+                  : 'Durchschnitt der letzten 12 Monate der Laufzeit, nach Steuern.'
+              }
+            >
               <div className="flex gap-2">
                 <NumberInput aria-label="Ziel-Dividende" value={config.goal.monthlyDividend} onChange={(v) => setGoal({ monthlyDividend: v })} suffix="€" min={0} allowEmpty placeholder="z. B. 2.000" className="flex-1" />
                 <BasisSelect value={config.goal.dividendBasis} onChange={(v) => setGoal({ dividendBasis: v })} />
@@ -325,6 +357,138 @@ export default function SettingsPanel({ config, onChange }: Props) {
         )}
       </Section>
     </div>
+  );
+}
+
+function WithdrawalSection({
+  config,
+  onChange,
+  yearOptions,
+}: Props & { yearOptions: { value: number; label: string }[] }) {
+  const w = config.withdrawal;
+  const setW = (patch: Partial<SimulationConfig['withdrawal']>) => onChange({ withdrawal: { ...w, ...patch } });
+  const lastYear = yearOptions[yearOptions.length - 1]?.value ?? 0;
+  const outside = w.enabled && w.startYear > lastYear;
+  const startAge = w.startYear - parseDate(config.birthDate).y;
+  const yearsUntil = Math.max(0, w.startYear - parseDate(config.startDate).y);
+  const todayValue = w.monthlyNet / Math.pow(1 + config.inflation / 100, yearsUntil);
+  const paysOutAtStart = config.dividendYield > 0 ? !reinvestsIn({ ...config, withdrawal: { ...w, enabled: true } }, w.startYear) : false;
+  const countsDividends = w.mode === 'fixed' && w.countDividends && paysOutAtStart;
+
+  const enable = (on: boolean) => {
+    if (!on) return setW({ enabled: false });
+    // Sensible defaults: start at 67 (or two thirds into the plan) and make sure the plan
+    // runs long enough to show the withdrawal phase.
+    const birthY = parseDate(config.birthDate).y;
+    const startY = parseDate(config.startDate).y;
+    const at67 = birthY + 67;
+    const startYear = at67 > startY ? at67 : startY + Math.max(1, Math.round((lastYear - startY) * (2 / 3)));
+    const patch: Partial<SimulationConfig> = { withdrawal: { ...w, enabled: true, startYear } };
+    if (lastYear - startYear < 10) {
+      patch.durationMode = 'age';
+      patch.targetAge = Math.max(config.targetAge, startYear - birthY + 23, 90);
+    }
+    onChange(patch);
+  };
+
+  const summary = !w.enabled
+    ? 'Aus'
+    : `ab ${w.startYear} · ${w.mode === 'fixed' ? `${formatEuro(w.monthlyNet)}/Monat` : `${formatPercent(w.rate)} p. a.`}`;
+
+  return (
+    <Section icon={<HandCoins size={16} />} title="Entnahme" summary={summary} defaultOpen={w.enabled}>
+      <Switch
+        label="Entnahmephase planen"
+        description="Ab einem bestimmten Jahr Geld aus dem Depot entnehmen, z. B. als Zusatzrente."
+        checked={w.enabled}
+        onChange={enable}
+      />
+      {w.enabled && (
+        <>
+          <Field label="Beginn" hint="Die Entnahme startet im Januar des gewählten Jahres und läuft bis zum Ende der Simulation.">
+            <Select aria-label="Beginn der Entnahme" value={w.startYear} onChange={(v) => setW({ startYear: v })} options={withValue(yearOptions, w.startYear)} />
+          </Field>
+          {outside && (
+            <p className="rounded-lg bg-critical-soft px-3 py-2 text-xs leading-snug text-critical">
+              Die Simulation endet vor dem Entnahmebeginn ({startAge} J.). Verlängere die Laufzeit im Abschnitt „Zeitraum“.
+            </p>
+          )}
+          <Segmented
+            aria-label="Art der Entnahme"
+            size="sm"
+            value={w.mode}
+            onChange={(v) => setW({ mode: v })}
+            options={[
+              { value: 'fixed', label: 'Fester Betrag' },
+              { value: 'rate', label: 'Entnahmerate' },
+            ]}
+          />
+          {w.mode === 'fixed' ? (
+            <NumberField
+              label={countsDividends ? 'Netto-Einkommen pro Monat' : 'Netto-Entnahme pro Monat'}
+              hint={
+                countsDividends
+                  ? 'Gesamtbetrag aus ausgezahlten Dividenden und Verkäufen, der nach Steuern auf deinem Konto ankommt. Verkauft wird nur, was die Dividenden nicht abdecken.'
+                  : 'Betrag aus Verkäufen, der nach Steuern auf deinem Konto ankommt. Verkauft wird entsprechend mehr, da Kursgewinne versteuert werden.'
+              }
+              value={w.monthlyNet}
+              onChange={(v) => setW({ monthlyNet: v ?? 0 })}
+              suffix="€"
+              min={0}
+            />
+          ) : (
+            <SliderField
+              label="Entnahmerate p. a."
+              hint="Prozent des Depotwerts zu Beginn, vor Steuern (z. B. 4 %-Regel). Der Euro-Betrag wird danach festgehalten und optional an die Inflation angepasst."
+              value={w.rate}
+              onChange={(v) => setW({ rate: v })}
+              min={0}
+              max={10}
+              step={0.1}
+              suffix="%"
+              inputMax={100}
+            />
+          )}
+          {w.mode === 'fixed' && yearsUntil > 0 && config.inflation > 0 && (
+            <p className="-mt-2 text-xs text-muted">Entspricht heute etwa {formatEuro(todayValue)} Kaufkraft.</p>
+          )}
+          {config.dividendYield > 0 && <Switch
+            label="Dividenden ab Beginn auszahlen"
+            description={
+              config.dividendStrategy === 'fromYear'
+                ? `Aktuell: Auszahlung ab ${config.dividendPayoutYear} (siehe „Markt“).`
+                : 'Statt zu reinvestieren, fließen die Netto-Dividenden ab Entnahmebeginn auf dein Konto.'
+            }
+            checked={paysOutAtStart}
+            onChange={(v) => onChange({ dividendStrategy: v ? 'withWithdrawal' : 'reinvest' })}
+          />}
+          {w.mode === 'fixed' && paysOutAtStart && (
+            <Switch
+              label="Dividenden auf den Betrag anrechnen"
+              description={
+                w.countDividends
+                  ? 'Es wird nur verkauft, was die Dividenden nicht abdecken. Das schont das Depot.'
+                  : 'Der Betrag wird zusätzlich zu den Dividenden verkauft.'
+              }
+              checked={w.countDividends}
+              onChange={(v) => setW({ countDividends: v })}
+            />
+          )}
+          <Switch
+            label="Jährlich an Inflation anpassen"
+            description="Der Betrag steigt jedes Jahr mit der Inflationsrate, damit die Kaufkraft erhalten bleibt."
+            checked={w.inflationAdjust}
+            onChange={(v) => setW({ inflationAdjust: v })}
+          />
+          <Switch
+            label="Sparrate ab Beginn stoppen"
+            description="Keine monatlichen Einzahlungen mehr während der Entnahme. Einmalzahlungen bleiben bestehen."
+            checked={w.stopContributions}
+            onChange={(v) => setW({ stopContributions: v })}
+          />
+        </>
+      )}
+    </Section>
   );
 }
 

@@ -50,7 +50,7 @@ describe('simulation', () => {
   });
 
   it('applies the partial exemption for equity funds', () => {
-    const base = { totalReturn: 4, dividendYield: 4, initialCapital: 100_000, monthlySavings: 0, durationYears: 1, allowance: 0, reinvestDividends: false };
+    const base = { totalReturn: 4, dividendYield: 4, initialCapital: 100_000, monthlySavings: 0, durationYears: 1, allowance: 0, dividendStrategy: 'payout' as const };
     const equity = runSimulation(cfg({ ...base, fundType: 'equity' }));
     const other = runSimulation(cfg({ ...base, fundType: 'other' }));
     expect(equity.summary.taxesPaid / other.summary.taxesPaid).toBeCloseTo(0.7, 6);
@@ -102,6 +102,121 @@ describe('simulation', () => {
   });
 });
 
+describe('withdrawals', () => {
+  const w = (over: Partial<SimulationConfig['withdrawal']>): SimulationConfig['withdrawal'] => ({
+    ...defaultConfig().withdrawal,
+    enabled: true,
+    startYear: 2028,
+    inflationAdjust: false,
+    ...over,
+  });
+
+  it('pays exactly the net target when there is no gain', () => {
+    const r = runSimulation(
+      cfg({ totalReturn: 0, dividendYield: 0, initialCapital: 100_000, monthlySavings: 0, durationYears: 4, withdrawal: w({ monthlyNet: 1000 }) }),
+    );
+    const ws = r.summary.withdrawal!;
+    expect(ws.net).toBeCloseTo(24 * 1000, 6);
+    expect(ws.taxes).toBe(0);
+    expect(r.summary.valueNominal).toBeCloseTo(100_000 - 24_000, 6);
+    expect(r.rows[2].monthlyWithdrawalNet).toBeCloseTo(1000, 6);
+  });
+
+  it('grosses up the sale so the net payout matches after tax', () => {
+    const r = runSimulation(
+      cfg({ totalReturn: 8, dividendYield: 0, initialCapital: 100_000, monthlySavings: 0, durationYears: 4, allowance: 0, withdrawal: w({ monthlyNet: 1000 }) }),
+    );
+    const ws = r.summary.withdrawal!;
+    expect(ws.firstMonthlyNet).toBeCloseTo(1000, 6);
+    expect(ws.firstMonthlyGross).toBeGreaterThan(1000);
+    expect(ws.taxes).toBeGreaterThan(0);
+    expect(ws.gross - ws.taxes).toBeCloseTo(ws.net, 6);
+  });
+
+  it('detects when the depot runs out', () => {
+    const r = runSimulation(
+      cfg({ totalReturn: 0, dividendYield: 0, initialCapital: 10_000, monthlySavings: 0, durationYears: 10, withdrawal: w({ monthlyNet: 1000 }) }),
+    );
+    const ws = r.summary.withdrawal!;
+    expect(ws.depletedYear).toBe(2028);
+    expect(ws.net).toBeCloseTo(10_000, 6);
+    expect(r.summary.valueNominal).toBe(0);
+  });
+
+  it('takes a percentage of the start value in rate mode and adjusts for inflation', () => {
+    const r = runSimulation(
+      cfg({
+        totalReturn: 0,
+        dividendYield: 0,
+        inflation: 2,
+        initialCapital: 120_000,
+        monthlySavings: 0,
+        durationYears: 4,
+        allowance: 1e9,
+        withdrawal: w({ mode: 'rate', rate: 4, inflationAdjust: true }),
+      }),
+    );
+    expect(r.summary.withdrawal!.firstMonthlyGross).toBeCloseTo(400, 6);
+    expect(r.rows[3].withdrawalGross / r.rows[2].withdrawalGross).toBeCloseTo(1.02, 6);
+  });
+
+  it('stops the savings plan when withdrawals start', () => {
+    const c = cfg({ monthlySavings: 500, withdrawal: w({ stopContributions: true }) });
+    expect(savingsForYear(c, 2027)).toBe(500);
+    expect(savingsForYear(c, 2028)).toBe(0);
+  });
+
+  it('switches from reinvesting to paying out at the withdrawal start', () => {
+    const r = runSimulation(
+      cfg({ totalReturn: 4, dividendYield: 4, initialCapital: 100_000, monthlySavings: 0, durationYears: 4, dividendStrategy: 'withWithdrawal', withdrawal: w({ monthlyNet: 0 }) }),
+    );
+    expect(r.rows[0].dividendsReinvested).toBe(true);
+    expect(r.rows[1].dividendsPaidOut).toBe(0);
+    expect(r.rows[2].dividendsReinvested).toBe(false);
+    expect(r.rows[2].dividendsPaidOut).toBeCloseTo(r.rows[2].dividendsNet, 6);
+    expect(r.summary.dividendsPaidOut).toBeCloseTo(r.rows[2].dividendsNet + r.rows[3].dividendsNet, 6);
+  });
+
+  it('pays out dividends from a chosen year', () => {
+    const r = runSimulation(cfg({ dividendStrategy: 'fromYear', dividendPayoutYear: 2027, durationYears: 3 }));
+    expect(r.rows.map((x) => x.dividendsReinvested)).toEqual([true, false, false]);
+  });
+
+  it('counts paid-out dividends towards the monthly target', () => {
+    const base = {
+      totalReturn: 3,
+      dividendYield: 3,
+      initialCapital: 200_000,
+      monthlySavings: 0,
+      durationYears: 4,
+      allowance: 1e9, // keep tax out of the picture
+      dividendStrategy: 'withWithdrawal' as const,
+    };
+    const counted = runSimulation(cfg({ ...base, withdrawal: w({ monthlyNet: 1000, countDividends: true }) }));
+    const extra = runSimulation(cfg({ ...base, withdrawal: w({ monthlyNet: 1000, countDividends: false }) }));
+    const yc = counted.rows[2];
+    // Dividends + sales add up to the target each month
+    expect((yc.dividendsPaidOut + yc.withdrawalNet) / 12).toBeCloseTo(1000, 6);
+    // Without counting, the full target is sold on top of the dividends
+    expect(extra.rows[2].withdrawalNet / 12).toBeCloseTo(1000, 6);
+    expect(counted.summary.valueNominal).toBeGreaterThan(extra.summary.valueNominal);
+  });
+
+  it('reports savings freed up by stopping the plan', () => {
+    const r = runSimulation(cfg({ monthlySavings: 500, durationYears: 4, withdrawal: w({ monthlyNet: 100 }) }));
+    expect(r.rows[1].freedSavings).toBe(0);
+    expect(r.rows[2].freedSavings).toBe(6000);
+    expect(r.summary.withdrawal!.firstYearMonthlyFreed).toBe(500);
+  });
+
+  it('measures the goal at the start of withdrawals', () => {
+    const c = cfg({ totalReturn: 0, dividendYield: 0, initialCapital: 0, monthlySavings: 1000, durationYears: 10, withdrawal: w({ startYear: 2031, monthlyNet: 5000 }) });
+    c.goal = { ...c.goal, enabled: true, wealth: 60_000, monthlyDividend: null };
+    // 5 years × 12 × 1000 € = 60.000 € before withdrawals start
+    expect(solveGoal(c, 'savings')).toBe(1000);
+  });
+});
+
 describe('goal solver', () => {
   it('finds the savings rate that reaches the target', () => {
     const c = cfg({ totalReturn: 0, dividendYield: 0, initialCapital: 0, durationYears: 10 });
@@ -131,5 +246,10 @@ describe('helpers', () => {
     expect(c.totalReturn).toBe(5);
     expect(c.churchTax).toBe(0);
     expect(c.goal.wealth).toBeNull();
+  });
+
+  it('migrates the old reinvest switch', () => {
+    expect(sanitize({ reinvestDividends: false }).dividendStrategy).toBe('payout');
+    expect(sanitize({ reinvestDividends: true }).dividendStrategy).toBe('reinvest');
   });
 });

@@ -7,15 +7,21 @@ export interface WealthPoint {
   age: number;
   value: number;
   invested: number;
+  withdrawn: number; // cumulative net withdrawals
   band?: [number, number];
 }
 
-export interface DividendPoint {
+/** Monthly averages for one calendar year (net, after tax). */
+export interface IncomePoint {
   year: number;
   age: number;
-  monthly: number;
-  annual: number;
-  gross: number;
+  divReinvested: number;
+  divPaid: number;
+  withdrawal: number;
+  freed: number;
+  divGrossAnnual: number;
+  withdrawalGrossAnnual: number;
+  withdrawalNetAnnual: number;
   partial: boolean;
 }
 
@@ -42,10 +48,19 @@ function TooltipRow({ color, label, value, strong }: { color?: string; label: st
   );
 }
 
-export function LegendItem({ color, label, variant = 'solid' }: { color: string; label: string; variant?: 'solid' | 'line' | 'band' | 'dashed' }) {
+export function LegendItem({
+  color,
+  label,
+  variant = 'solid',
+}: {
+  color: string;
+  label: string;
+  variant?: 'solid' | 'faint' | 'line' | 'band' | 'dashed';
+}) {
   return (
     <span className="inline-flex items-center gap-2 text-[13px] text-ink-2">
       {variant === 'solid' && <span className="size-2.5 rounded-sm" style={{ background: color }} />}
+      {variant === 'faint' && <span className="size-2.5 rounded-sm opacity-35" style={{ background: color }} />}
       {variant === 'line' && <span className="h-0.5 w-4 rounded-full" style={{ background: color }} />}
       {variant === 'band' && <span className="h-2.5 w-4 rounded-sm opacity-25" style={{ background: color }} />}
       {variant === 'dashed' && <span className="w-4 border-t-2 border-dashed" style={{ borderColor: color }} />}
@@ -58,9 +73,10 @@ interface WealthChartProps {
   data: WealthPoint[];
   target?: number | null;
   spread: number;
+  withdrawalStart?: number | null;
 }
 
-export function WealthChart({ data, target, spread }: WealthChartProps) {
+export function WealthChart({ data, target, spread, withdrawalStart }: WealthChartProps) {
   const showBand = spread > 0 && data.some((d) => d.band);
   return (
     <div className="h-[340px] w-full">
@@ -91,7 +107,11 @@ export function WealthChart({ data, target, spread }: WealthChartProps) {
                 <TooltipShell title={`${p.year} · ${p.age} Jahre`}>
                   <TooltipRow color="var(--series-1)" label="Depotwert" value={formatEuro(p.value)} strong />
                   <TooltipRow color="var(--series-2)" label="Einzahlungen" value={formatEuro(p.invested)} />
-                  <TooltipRow label="Wertzuwachs" value={formatEuro(p.value - p.invested)} />
+                  {p.withdrawn > 0 ? (
+                    <TooltipRow color="var(--series-4)" label="Entnommen (netto)" value={formatEuro(p.withdrawn)} />
+                  ) : (
+                    <TooltipRow label="Wertzuwachs" value={formatEuro(p.value - p.invested)} />
+                  )}
                   {p.band && showBand && (
                     <div className="mt-2 border-t border-line pt-2">
                       <TooltipRow label={`Rendite −${spread} %-Pkt.`} value={formatEuro(p.band[0])} />
@@ -140,15 +160,48 @@ export function WealthChart({ data, target, spread }: WealthChartProps) {
               label={{ value: 'Ziel', position: 'insideTopLeft', fill: 'var(--ink-2)', fontSize: 12 }}
             />
           ) : null}
+          {withdrawalStart ? <WithdrawalMarker year={withdrawalStart} /> : null}
         </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-export function DividendChart({ data, target }: { data: DividendPoint[]; target?: number | null }) {
+/** Vertical marker where the withdrawal phase begins. */
+function WithdrawalMarker({ year }: { year: number }) {
   return (
-    <div className="h-[280px] w-full">
+    <ReferenceLine
+      x={year}
+      stroke="var(--series-4)"
+      strokeDasharray="4 4"
+      label={{ value: 'Entnahme', position: 'insideTopRight', fill: 'var(--ink-2)', fontSize: 12 }}
+    />
+  );
+}
+
+interface IncomeChartProps {
+  data: IncomePoint[];
+  target?: number | null;
+  showFreed: boolean;
+  withdrawalStart?: number | null;
+}
+
+/**
+ * Monthly money from the depot: reinvested dividends (faint), paid-out dividends, withdrawals
+ * and – optionally – savings that are no longer invested, stacked per year.
+ */
+export function IncomeChart({ data, target, showFreed, withdrawalStart }: IncomeChartProps) {
+  const has = (k: keyof IncomePoint) => data.some((d) => (d[k] as number) > 0.005);
+  const series = [
+    { key: 'divReinvested' as const, color: 'var(--series-3)', opacity: 0.35, show: has('divReinvested') },
+    { key: 'divPaid' as const, color: 'var(--series-3)', opacity: 1, show: has('divPaid') },
+    { key: 'withdrawal' as const, color: 'var(--series-4)', opacity: 1, show: has('withdrawal') },
+    { key: 'freed' as const, color: 'var(--series-2)', opacity: 1, show: showFreed && has('freed') },
+  ].filter((s) => s.show);
+  const top = series[series.length - 1]?.key;
+
+  return (
+    <div className="h-[300px] w-full">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
           <CartesianGrid vertical={false} stroke="var(--line)" />
@@ -158,17 +211,52 @@ export function DividendChart({ data, target }: { data: DividendPoint[]; target?
             cursor={{ fill: 'var(--surface-2)' }}
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
-              const p = payload[0].payload as DividendPoint;
+              const p = payload[0].payload as IncomePoint;
+              const payout = p.divPaid + p.withdrawal;
+              const sellTax = p.withdrawalGrossAnnual - p.withdrawalNetAnnual;
               return (
-                <TooltipShell title={`${p.year} · ${p.age} Jahre${p.partial ? ' (Teiljahr)' : ''}`}>
-                  <TooltipRow color="var(--series-3)" label="Ø pro Monat (netto)" value={formatEuro(p.monthly)} strong />
-                  <TooltipRow label="Im Jahr (netto)" value={formatEuro(p.annual)} />
-                  <TooltipRow label="Im Jahr (brutto)" value={formatEuro(p.gross)} />
+                <TooltipShell title={`${p.year} · ${p.age} Jahre${p.partial ? ' (Teiljahr)' : ''} · Ø pro Monat`}>
+                  {p.divReinvested > 0 && <TooltipRow color="var(--series-3)" label="Dividende (reinvestiert)" value={formatEuro(p.divReinvested)} />}
+                  {p.divPaid > 0 && <TooltipRow color="var(--series-3)" label="Dividende (ausgezahlt)" value={formatEuro(p.divPaid)} />}
+                  {p.withdrawal > 0 && <TooltipRow color="var(--series-4)" label="Entnahme" value={formatEuro(p.withdrawal)} />}
+                  {payout > 0 && (
+                    <div className="mt-2 space-y-1.5 border-t border-line pt-2">
+                      <TooltipRow label="Auszahlung aus dem Depot" value={formatEuro(payout)} strong />
+                      {showFreed && p.freed > 0 && (
+                        <>
+                          <TooltipRow color="var(--series-2)" label="+ frei gewordene Sparrate" value={formatEuro(p.freed)} />
+                          <TooltipRow label="Mehr Geld pro Monat" value={formatEuro(payout + p.freed)} strong />
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-2 space-y-1.5 border-t border-line pt-2">
+                    <TooltipRow label="Dividende im Jahr (brutto)" value={formatEuro(p.divGrossAnnual)} />
+                    {p.withdrawalGrossAnnual > 0 && (
+                      <>
+                        <TooltipRow label="Verkäufe im Jahr (brutto)" value={formatEuro(p.withdrawalGrossAnnual)} />
+                        <TooltipRow label="Steuer auf Verkäufe" value={formatEuro(sellTax)} />
+                      </>
+                    )}
+                  </div>
                 </TooltipShell>
               );
             }}
           />
-          <Bar dataKey="monthly" fill="var(--series-3)" radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
+          {series.map((s) => (
+            <Bar
+              key={s.key}
+              dataKey={s.key}
+              stackId="income"
+              fill={s.color}
+              fillOpacity={s.opacity}
+              stroke="var(--surface)"
+              strokeWidth={series.length > 1 ? 1 : 0}
+              radius={s.key === top ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+              maxBarSize={28}
+              isAnimationActive={false}
+            />
+          ))}
           {target ? (
             <ReferenceLine
               y={target}
@@ -178,6 +266,7 @@ export function DividendChart({ data, target }: { data: DividendPoint[]; target?
               label={{ value: 'Ziel', position: 'insideTopLeft', fill: 'var(--ink-2)', fontSize: 12 }}
             />
           ) : null}
+          {withdrawalStart ? <WithdrawalMarker year={withdrawalStart} /> : null}
         </BarChart>
       </ResponsiveContainer>
     </div>

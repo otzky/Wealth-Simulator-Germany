@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, Flag } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, Flag, HandCoins } from 'lucide-react';
 import type { GoalResult, SimulationConfig, SimulationResult, ValueBasis } from '../types';
 import { formatEuro, formatEuroCompact, formatNumber, formatPercent } from '../lib/format';
 import { downloadCsv } from '../lib/export';
 import { Button, Card, CardHeader, Hint, Segmented, cx } from './ui';
-import { DividendChart, LegendItem, WealthChart, type DividendPoint, type WealthPoint } from './Charts';
+import { IncomeChart, LegendItem, WealthChart, type IncomePoint, type WealthPoint } from './Charts';
 
 interface Props {
   config: SimulationConfig;
@@ -21,33 +21,52 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
   const { summary: s, rows } = result;
   const real = basis === 'real';
 
-  const wealthData = useMemo<WealthPoint[]>(
+  const ws = s.withdrawal;
+  const withdrawalStart = ws ? ws.startYear : null;
+
+  const [showFreed, setShowFreed] = useState(false);
+
+  const wealthData = useMemo<WealthPoint[]>(() => {
+    let paidNom = 0;
+    let paidReal = 0;
+    return rows.map((r, i) => {
+      const d = real ? r.deflator : 1;
+      const lo = low?.rows[i]?.valueEnd;
+      const hi = high?.rows[i]?.valueEnd;
+      paidNom += r.withdrawalNet + r.dividendsPaidOut;
+      paidReal += r.realWithdrawalNet + r.realDividendsPaidOut;
+      return {
+        year: r.year,
+        age: r.age,
+        value: r.valueEnd / d,
+        invested: real ? r.realInvestedTotal : r.investedTotal,
+        withdrawn: real ? paidReal : paidNom,
+        band: lo != null && hi != null ? [lo / d, hi / d] : undefined,
+      };
+    });
+  }, [rows, low, high, real]);
+
+  const incomeData = useMemo<IncomePoint[]>(
     () =>
-      rows.map((r, i) => {
+      rows.map((r) => {
         const d = real ? r.deflator : 1;
-        const lo = low?.rows[i]?.valueEnd;
-        const hi = high?.rows[i]?.valueEnd;
+        const divMonthly = real ? r.realMonthlyDividendNet : r.monthlyDividendNet;
+        const paidMonthly = (real ? r.realDividendsPaidOut : r.dividendsPaidOut) / r.months;
+        const wNetAnnual = real ? r.realWithdrawalNet : r.withdrawalNet;
         return {
           year: r.year,
           age: r.age,
-          value: r.valueEnd / d,
-          invested: real ? r.realInvestedTotal : r.investedTotal,
-          band: lo != null && hi != null ? [lo / d, hi / d] : undefined,
+          divReinvested: Math.max(0, divMonthly - paidMonthly),
+          divPaid: paidMonthly,
+          withdrawal: real ? r.realMonthlyWithdrawalNet : r.monthlyWithdrawalNet,
+          freed: (real ? r.realFreedSavings : r.freedSavings) / r.months,
+          divGrossAnnual: r.dividendsGross / d,
+          withdrawalNetAnnual: wNetAnnual,
+          // Real gross scaled with the same factor as the net amount
+          withdrawalGrossAnnual: r.withdrawalNet > 0 ? (r.withdrawalGross / r.withdrawalNet) * wNetAnnual : 0,
+          partial: r.months < 12,
         };
       }),
-    [rows, low, high, real],
-  );
-
-  const dividendData = useMemo<DividendPoint[]>(
-    () =>
-      rows.map((r) => ({
-        year: r.year,
-        age: r.age,
-        monthly: real ? r.realMonthlyDividendNet : r.monthlyDividendNet,
-        annual: real ? r.realDividendsNet : r.dividendsNet,
-        gross: r.dividendsGross / (real ? r.deflator : 1),
-        partial: r.months < 12,
-      })),
     [rows, real],
   );
 
@@ -55,8 +74,16 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
   const invested = real ? s.investedReal : s.invested;
   const afterSale = real ? s.valueAfterSaleReal : s.valueAfterSale;
   const monthlyDiv = real ? s.finalMonthlyDividendNetReal : s.finalMonthlyDividendNet;
-  const multiple = invested > 0 ? value / invested : 0;
+  const withdrawnNet = ws ? (real ? ws.netReal : ws.net) : 0;
+  const divPaidOut = real ? s.dividendsPaidOutReal : s.dividendsPaidOut;
+  const paidOut = withdrawnNet + divPaidOut; // everything that reached your account
+  // Total value created: what is left plus what was paid out, relative to what was paid in
+  const multiple = invested > 0 ? (value + paidOut) / invested : 0;
   const hasDividends = config.dividendYield > 0;
+  const hasPayouts = paidOut > 0.5;
+  const hasFreed = rows.some((r) => r.freedSavings > 0);
+  const anyReinvested = hasDividends && rows.some((r) => r.dividendsReinvested);
+  const anyPaid = s.dividendsPaidOut > 0.5;
 
   const wealthTarget = goal && config.goal.wealth && config.goal.wealthBasis === basis ? config.goal.wealth : null;
   const divTarget = goal && config.goal.monthlyDividend && config.goal.dividendBasis === basis ? config.goal.monthlyDividend : null;
@@ -92,15 +119,39 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
               )}
             </p>
           </div>
-          <dl className="grid grid-cols-3 gap-3">
+          <dl className={cx('grid gap-3', hasPayouts ? 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-2' : 'grid-cols-3')}>
             <MiniStat label="Eingezahlt" value={formatEuroCompact(invested)} swatch="var(--series-2)" />
-            <MiniStat label="Wertzuwachs" value={formatEuroCompact(value - invested)} swatch="var(--series-1)" />
+            {hasPayouts ? (
+              <MiniStat
+                label="Ausgezahlt"
+                hint={`Netto auf dein Konto: ${formatEuro(withdrawnNet)} Entnahmen + ${formatEuro(divPaidOut)} Dividenden.`}
+                value={formatEuroCompact(paidOut)}
+                swatch="var(--series-4)"
+              />
+            ) : null}
+            <MiniStat
+              label={ws ? 'Ertrag netto' : 'Wertzuwachs'}
+              hint={ws ? 'Depotwert plus alle Auszahlungen minus Einzahlungen, nach Steuern auf die Entnahmen.' : undefined}
+              value={formatEuroCompact(value + paidOut - invested)}
+              swatch="var(--series-1)"
+            />
             <MiniStat label="Faktor" value={`${formatNumber(Math.round(multiple * 10) / 10)}×`} />
           </dl>
         </div>
       </Card>
 
       {goal && <GoalCard goal={goal} config={config} />}
+
+      {ws && <WithdrawalCard config={config} result={result} real={real} />}
+      {config.withdrawal.enabled && !ws && (
+        <Card className="flex items-start gap-3 px-5 py-4 text-[13px] text-ink-2 sm:px-6">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-critical" />
+          <p>
+            Die Entnahme ab {config.withdrawal.startYear} liegt nach dem Ende der Simulation ({s.endYear}). Verlängere die Laufzeit,
+            um die Entnahmephase zu sehen.
+          </p>
+        </Card>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -113,11 +164,17 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
         <Kpi
           label="Dividenden gesamt"
           value={formatEuroCompact(real ? s.dividendsNetReal : s.dividendsNet)}
-          sub={config.reinvestDividends ? 'netto, reinvestiert' : 'netto, ausgezahlt'}
+          sub={
+            !anyPaid
+              ? 'netto, reinvestiert'
+              : !anyReinvested
+                ? 'netto, ausgezahlt'
+                : `netto · ${formatEuroCompact(divPaidOut)} ausgezahlt`
+          }
         />
         <Kpi
           label="Steuern laufend"
-          hint="Auf Ausschüttungen und Vorabpauschale gezahlte Steuern während der Laufzeit (nominal)."
+          hint={`Auf Ausschüttungen, Vorabpauschale${ws ? ' und Entnahmen' : ''} gezahlte Steuern während der Laufzeit (nominal).`}
           value={formatEuroCompact(s.taxesPaid)}
           sub={`+ ${formatEuroCompact(s.saleTax)} bei Verkauf`}
         />
@@ -139,25 +196,57 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
           <LegendItem color="var(--series-1)" label="Depotwert" />
           <LegendItem color="var(--series-2)" label="Einzahlungen" variant="line" />
           {config.returnSpread > 0 && <LegendItem color="var(--series-1)" label={`Bandbreite ±${formatNumber(config.returnSpread)} %-Pkt.`} variant="band" />}
+          {ws && <LegendItem color="var(--series-4)" label="Entnahmebeginn" variant="dashed" />}
         </div>
         <div className="px-2 pt-2 pb-4 sm:px-4">
-          <WealthChart data={wealthData} target={wealthTarget} spread={config.returnSpread} />
+          <WealthChart data={wealthData} target={wealthTarget} spread={config.returnSpread} withdrawalStart={withdrawalStart} />
         </div>
       </Card>
 
       <div className="grid gap-5 2xl:grid-cols-[1.4fr_1fr]">
-        {/* Dividend chart */}
+        {/* Income chart: dividends (reinvested/paid out), withdrawals and freed savings, stacked */}
         <Card>
           <CardHeader
-            title="Netto-Dividende pro Monat"
-            subtitle={hasDividends ? `Ø je Jahr${real ? ', in heutiger Kaufkraft' : ''}` : 'Bei 0 % Ausschüttung fallen keine Dividenden an.'}
+            title={hasPayouts ? 'Netto-Einkommen pro Monat' : 'Netto-Dividende pro Monat'}
+            subtitle={
+              hasDividends || ws
+                ? `Ø je Jahr, nach Steuern${real ? ', in heutiger Kaufkraft' : ''}`
+                : 'Bei 0 % Ausschüttung fallen keine Dividenden an.'
+            }
+            actions={
+              hasFreed ? (
+                <Segmented
+                  aria-label="Frei gewordene Sparrate anzeigen"
+                  size="sm"
+                  value={showFreed ? 'on' : 'off'}
+                  onChange={(v) => setShowFreed(v === 'on')}
+                  options={[
+                    { value: 'off', label: 'Depot' },
+                    { value: 'on', label: '+ Sparrate' },
+                  ]}
+                />
+              ) : undefined
+            }
           />
-          <div className="px-2 pt-2 pb-4 sm:px-4">
-            <DividendChart data={dividendData} target={divTarget} />
+          <div className="flex flex-wrap gap-x-5 gap-y-2 px-5 pt-3 sm:px-6">
+            {anyReinvested && <LegendItem color="var(--series-3)" label="Dividende reinvestiert" variant="faint" />}
+            {anyPaid && <LegendItem color="var(--series-3)" label="Dividende ausgezahlt" />}
+            {ws && ws.net > 0 && <LegendItem color="var(--series-4)" label="Entnahme" />}
+            {showFreed && hasFreed && <LegendItem color="var(--series-2)" label="Frei gewordene Sparrate" />}
           </div>
+          <div className="px-2 pt-2 pb-4 sm:px-4">
+            <IncomeChart data={incomeData} target={divTarget} showFreed={showFreed} withdrawalStart={withdrawalStart} />
+          </div>
+          {(showFreed && hasFreed) || (ws && anyReinvested && !anyPaid) ? (
+            <p className="px-5 pb-5 text-xs leading-snug text-muted sm:px-6">
+              {showFreed && hasFreed
+                ? 'Die frei gewordene Sparrate ist kein Depotertrag: Es ist Geld, das du ab Entnahmebeginn nicht mehr anlegst und zusätzlich zur Verfügung hast.'
+                : 'Dividenden werden reinvestiert und sind daher nicht Teil der Auszahlung. Unter „Entnahme“ oder „Markt“ kannst du sie ab einem Zeitpunkt auszahlen lassen.'}
+            </p>
+          ) : null}
         </Card>
 
-        <BalanceSheet config={config} result={result} />
+        <BalanceSheet result={result} />
       </div>
 
       <YearTable config={config} result={result} real={real} />
@@ -179,12 +268,13 @@ function formatYears(months: number) {
   return `${y} J. ${m} Mon.`;
 }
 
-function MiniStat({ label, value, swatch }: { label: string; value: string; swatch?: string }) {
+function MiniStat({ label, value, swatch, hint }: { label: string; value: string; swatch?: string; hint?: string }) {
   return (
     <div className="rounded-xl bg-surface-2 px-3 py-2.5">
       <dt className="flex items-center gap-1.5 text-xs text-muted">
         {swatch && <span className="size-2 rounded-sm" style={{ background: swatch }} />}
         {label}
+        {hint && <Hint>{hint}</Hint>}
       </dt>
       <dd className="mt-1 text-[15px] font-semibold text-ink">{value}</dd>
     </div>
@@ -225,7 +315,11 @@ function GoalCard({ goal, config }: { goal: GoalResult; config: SimulationConfig
           <div>
             <p className="text-[15px] font-semibold text-ink">{met ? 'Ziel erreicht' : 'Ziel noch nicht erreicht'}</p>
             <p className="text-[13px] text-muted">
-              {goal.reachedYear != null ? `Mit dem aktuellen Plan ab ${goal.reachedYear} (Alter ${goal.reachedAge})` : 'Mit dem aktuellen Plan nicht innerhalb der Laufzeit'}
+              {goal.reachedYear != null
+                ? `Mit dem aktuellen Plan ab ${goal.reachedYear} (Alter ${goal.reachedAge})`
+                : goal.atWithdrawal
+                  ? 'Mit dem aktuellen Plan nicht bis zum Entnahmebeginn'
+                  : 'Mit dem aktuellen Plan nicht innerhalb der Laufzeit'}
             </p>
           </div>
         </div>
@@ -261,6 +355,92 @@ function GoalCard({ goal, config }: { goal: GoalResult; config: SimulationConfig
   );
 }
 
+function WithdrawalCard({ config, result, real }: { config: SimulationConfig; result: SimulationResult; real: boolean }) {
+  const s = result.summary;
+  const ws = s.withdrawal!;
+  const depleted = ws.depletedYear != null;
+  const lastsYears = depleted ? ws.depletedYear! - ws.startYear + 1 : null;
+  const startValue = real ? ws.startValueReal : ws.startValue;
+  const endValue = real ? s.valueReal : s.valueNominal;
+  // First-year averages, converted to today's money with the deflator at the start
+  const k = real && ws.startValue > 0 ? ws.startValueReal / ws.startValue : 1;
+  const fyNet = ws.firstYearMonthlyNet * k;
+  const fyDiv = ws.firstYearMonthlyDividends * k;
+  const fyFreed = ws.firstYearMonthlyFreed * k;
+  const fyPayout = fyNet + fyDiv;
+  const paidTotal = (real ? ws.netReal : ws.net) + (real ? s.dividendsPaidOutReal : s.dividendsPaidOut);
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-5 sm:px-6">
+        <div className="flex items-center gap-3">
+          <span className="flex size-10 items-center justify-center rounded-xl bg-surface-2 text-series-4">
+            <HandCoins size={20} />
+          </span>
+          <div>
+            <p className="text-[15px] font-semibold text-ink">Entnahmephase</p>
+            <p className="tnum text-[13px] text-muted">
+              ab {ws.startYear} mit {ws.startAge} Jahren ·{' '}
+              {config.withdrawal.mode === 'fixed' ? `${formatEuro(config.withdrawal.monthlyNet)} netto/Monat` : `${formatPercent(config.withdrawal.rate)} p. a.`}
+              {config.withdrawal.inflationAdjust ? ', inflationsangepasst' : ''}
+            </p>
+          </div>
+        </div>
+        <span
+          className={cx(
+            'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium',
+            depleted ? 'bg-critical-soft text-critical' : 'bg-good-soft text-good',
+          )}
+        >
+          {depleted ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+          {depleted
+            ? `Depot aufgebraucht ${ws.depletedYear} (Alter ${ws.depletedAge})`
+            : `Reicht bis ${s.endYear} (Alter ${s.endAge})`}
+        </span>
+      </div>
+      <dl className="grid grid-cols-2 gap-3 px-5 py-5 sm:px-6 xl:grid-cols-4">
+        <Stat label="Depotwert bei Beginn" value={formatEuroCompact(startValue)} sub={real ? 'in heutiger Kaufkraft' : 'nominal'} />
+        <Stat
+          label="Auszahlung pro Monat"
+          hint="Durchschnitt im ersten Entnahmejahr, nach Steuern: Verkäufe plus ausgezahlte Dividenden."
+          value={formatEuro(fyPayout)}
+          sub={[
+            fyDiv > 0.5 ? `${formatEuro(fyNet)} Entnahme + ${formatEuro(fyDiv)} Dividende` : `Ø ${formatEuro(ws.firstYearMonthlyGross)} brutto verkauft`,
+            fyFreed > 0.5 ? `+ ${formatEuro(fyFreed)} frei gewordene Sparrate` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        />
+        <Stat
+          label="Entnahmerate"
+          hint="Brutto-Verkäufe im ersten Entnahmejahr im Verhältnis zum Depotwert bei Beginn. Rund 3–4 % gelten historisch als langfristig tragfähig."
+          value={`${formatPercent(ws.effectiveRate)} p. a.`}
+          sub="vom Startwert, vor Steuern"
+        />
+        <Stat
+          label={depleted ? `Ausgezahlt in ${lastsYears} Jahren` : 'Ausgezahlt gesamt'}
+          hint="Netto-Entnahmen plus ausgezahlte Dividenden über die gesamte Laufzeit."
+          value={formatEuroCompact(paidTotal)}
+          sub={depleted ? `netto · ${formatEuroCompact(ws.taxes)} Steuern` : `netto · Restwert ${formatEuroCompact(endValue)}`}
+        />
+      </dl>
+    </Card>
+  );
+}
+
+function Stat({ label, value, sub, hint }: { label: string; value: string; sub?: string; hint?: string }) {
+  return (
+    <div className="rounded-xl bg-surface-2 px-4 py-3">
+      <dt className="flex items-center gap-1.5 text-xs text-muted">
+        {label}
+        {hint && <Hint>{hint}</Hint>}
+      </dt>
+      <dd className="mt-1 text-[18px] leading-tight font-semibold text-ink">{value}</dd>
+      {sub && <p className="mt-0.5 text-xs text-muted">{sub}</p>}
+    </div>
+  );
+}
+
 function Progress({ label, value, target }: { label: string; value: number; target: string }) {
   const pct = Math.min(1, Math.max(0, value));
   const done = value >= 1;
@@ -278,19 +458,32 @@ function Progress({ label, value, target }: { label: string; value: number; targ
   );
 }
 
-function BalanceSheet({ config, result }: { config: SimulationConfig; result: SimulationResult }) {
+function BalanceSheet({ result }: { result: SimulationResult }) {
   const s = result.summary;
-  const lines: { label: string; value: number; kind?: 'sum' | 'minus' | 'info'; hint?: string }[] = [
-    { label: 'Einzahlungen', value: s.invested },
-    { label: 'Wertzuwachs', value: s.growth, hint: 'Kursgewinne und reinvestierte Dividenden, nach Kosten und laufenden Steuern.' },
+  const ws = s.withdrawal;
+  type Line = { label: string; value: number; kind: 'start' | 'plus' | 'minus' | 'sum'; hint?: string };
+  const lines: Line[] = [
+    { label: 'Einzahlungen', value: s.invested, kind: 'start' },
+    { label: 'Wertzuwachs', value: s.growth, kind: 'plus', hint: 'Kursgewinne und reinvestierte Dividenden, nach Kosten und laufenden Steuern.' },
+    ...(ws
+      ? [{ label: 'Entnahmen (Verkäufe)', value: ws.gross, kind: 'minus' as const, hint: 'Verkaufte Anteile vor Steuern. Netto ausgezahlt wurde der Betrag abzüglich der Steuer.' }]
+      : []),
+    ...(s.dividendsPaidOut > 0.5
+      ? [{ label: 'Ausgezahlte Dividenden', value: s.dividendsPaidOut, kind: 'minus' as const, hint: 'Netto-Dividenden, die auf dein Konto geflossen sind statt ins Depot.' }]
+      : []),
     { label: 'Depotwert', value: s.valueNominal, kind: 'sum' },
-    { label: 'Steuer bei Verkauf', value: -s.saleTax, kind: 'minus', hint: 'Abgeltungsteuer auf den noch unversteuerten Gewinn, nach Teilfreistellung und Freibetrag.' },
+    { label: 'Steuer bei Verkauf', value: s.saleTax, kind: 'minus', hint: 'Abgeltungsteuer auf den noch unversteuerten Gewinn, nach Teilfreistellung und Freibetrag.' },
     { label: 'Netto nach Verkauf', value: s.valueAfterSale, kind: 'sum' },
   ];
   const info = [
+    ...(ws
+      ? [
+          { label: 'Netto ausgezahlt (Entnahmen)', value: ws.net },
+          { label: 'Steuern auf Entnahmen', value: ws.taxes },
+        ]
+      : []),
     { label: 'Kosten (Gebühren + TER)', value: s.costsPaid },
     { label: 'Steuern laufend', value: s.taxesPaid },
-    ...(!config.reinvestDividends ? [{ label: 'Ausgezahlte Dividenden (netto)', value: s.dividendsNet }] : []),
     { label: 'Kaufkraftverlust durch Inflation', value: s.valueAfterSale - s.valueAfterSaleReal },
   ];
   return (
@@ -312,7 +505,8 @@ function BalanceSheet({ config, result }: { config: SimulationConfig; result: Si
                 {l.hint && <Hint>{l.hint}</Hint>}
               </dt>
               <dd className={cx('tnum', l.kind === 'minus' && 'text-critical')}>
-                {l.kind === 'minus' ? '− ' + formatEuro(-l.value) : (l.kind === 'sum' ? '' : l.value >= 0 && l.label !== 'Einzahlungen' ? '+ ' : '') + formatEuro(l.value)}
+                {l.kind === 'minus' ? '− ' : l.kind === 'plus' ? (l.value >= 0 ? '+ ' : '− ') : ''}
+                {formatEuro(l.kind === 'plus' ? Math.abs(l.value) : l.value)}
               </dd>
             </div>
           ))}
@@ -335,11 +529,12 @@ function YearTable({ config, result, real }: { config: SimulationConfig; result:
   const [open, setOpen] = useState(false);
   const rows = result.rows;
   const visible = open ? rows : rows.slice(0, 8);
+  const showW = !!result.summary.withdrawal;
   return (
     <Card>
       <CardHeader
         title="Jahresübersicht"
-        subtitle={`${rows.length} Kalenderjahre · Dividenden ${real ? 'in Kaufkraft' : 'nominal'}`}
+        subtitle={`${rows.length} Kalenderjahre · Dividenden${showW ? ' und Entnahmen' : ''} ${real ? 'in Kaufkraft' : 'nominal'}`}
         actions={
           <Button size="sm" onClick={() => downloadCsv(config, result)}>
             <Download size={14} /> CSV
@@ -347,7 +542,7 @@ function YearTable({ config, result, real }: { config: SimulationConfig; result:
         }
       />
       <div className="mt-4 overflow-x-auto">
-        <table className="tnum w-full min-w-[820px] text-right text-[13px]">
+        <table className={cx('tnum w-full text-right text-[13px]', showW ? 'min-w-[960px]' : 'min-w-[820px]')}>
           <thead>
             <tr className="border-y border-line bg-surface-2 text-xs text-muted">
               <th className="px-4 py-2.5 text-left font-medium sm:pl-6">Jahr</th>
@@ -358,6 +553,8 @@ function YearTable({ config, result, real }: { config: SimulationConfig; result:
               <th className="px-3 py-2.5 font-medium">Kaufkraft</th>
               <th className="px-3 py-2.5 font-medium">Dividende</th>
               <th className="px-3 py-2.5 font-medium">Ø Monat</th>
+              {showW && <th className="px-3 py-2.5 font-medium">Entnahme</th>}
+              {showW && <th className="px-3 py-2.5 font-medium">Ø Monat</th>}
               <th className="px-3 py-2.5 font-medium">Steuern</th>
               <th className="px-4 py-2.5 font-medium sm:pr-6">Kosten</th>
             </tr>
@@ -374,8 +571,17 @@ function YearTable({ config, result, real }: { config: SimulationConfig; result:
                 <td className="px-3 py-2.5">{formatEuro(r.investedTotal)}</td>
                 <td className="px-3 py-2.5 font-medium text-ink">{formatEuro(r.valueEnd)}</td>
                 <td className="px-3 py-2.5">{formatEuro(r.realValueEnd)}</td>
-                <td className="px-3 py-2.5">{formatEuro(real ? r.realDividendsNet : r.dividendsNet)}</td>
+                <td className="px-3 py-2.5">
+                  {!r.dividendsReinvested && r.dividendsNet > 0 && (
+                    <span className="mr-1.5 rounded bg-surface-3 px-1 py-0.5 text-[10px] font-medium text-ink-2" title="Ausgezahlt statt reinvestiert">
+                      aus
+                    </span>
+                  )}
+                  {formatEuro(real ? r.realDividendsNet : r.dividendsNet)}
+                </td>
                 <td className="px-3 py-2.5">{formatEuro(real ? r.realMonthlyDividendNet : r.monthlyDividendNet)}</td>
+                {showW && <td className="px-3 py-2.5">{formatEuro(real ? r.realWithdrawalNet : r.withdrawalNet)}</td>}
+                {showW && <td className="px-3 py-2.5">{formatEuro(real ? r.realMonthlyWithdrawalNet : r.monthlyWithdrawalNet)}</td>}
                 <td className="px-3 py-2.5">{formatEuro(r.taxes)}</td>
                 <td className="px-4 py-2.5 sm:pr-6">{formatEuro(r.costs)}</td>
               </tr>

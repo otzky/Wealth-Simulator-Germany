@@ -1,4 +1,4 @@
-import type { GoalResult, GoalVariable, SimulationConfig, SimulationResult } from '../types';
+import type { GoalResult, GoalVariable, SimulationConfig, SimulationResult, YearRow } from '../types';
 import { runSimulation } from './simulation';
 
 type Goal = SimulationConfig['goal'];
@@ -7,20 +7,53 @@ function hasTargets(goal: Goal) {
   return (goal.wealth ?? 0) > 0 || (goal.monthlyDividend ?? 0) > 0;
 }
 
-function wealthOf(res: SimulationResult, goal: Goal) {
-  return goal.wealthBasis === 'real' ? res.summary.valueReal : res.summary.valueNominal;
+interface Snapshot {
+  wealth: number;
+  wealthReal: number;
+  dividend: number;
+  dividendReal: number;
+  rows: YearRow[]; // rows that count towards reaching the goal
+  atWithdrawal: boolean;
 }
 
-function dividendOf(res: SimulationResult, goal: Goal) {
-  return goal.dividendBasis === 'real'
-    ? res.summary.finalMonthlyDividendNetReal
-    : res.summary.finalMonthlyDividendNet;
+/**
+ * Where the goal is measured: at the end of the plan, or – with a withdrawal phase –
+ * at the end of the year before withdrawals start.
+ */
+export function goalSnapshot(res: SimulationResult, cfg: SimulationConfig): Snapshot {
+  const s = res.summary;
+  if (cfg.withdrawal.enabled && s.withdrawal) {
+    const idx = res.rows.findIndex((r) => r.year >= cfg.withdrawal.startYear) - 1;
+    if (idx >= 0) {
+      const r = res.rows[idx];
+      return {
+        wealth: r.valueEnd,
+        wealthReal: r.realValueEnd,
+        dividend: r.monthlyDividendNet,
+        dividendReal: r.realMonthlyDividendNet,
+        rows: res.rows.slice(0, idx + 1),
+        atWithdrawal: true,
+      };
+    }
+  }
+  return {
+    wealth: s.valueNominal,
+    wealthReal: s.valueReal,
+    dividend: s.finalMonthlyDividendNet,
+    dividendReal: s.finalMonthlyDividendNetReal,
+    rows: res.rows,
+    atWithdrawal: false,
+  };
 }
 
-export function meetsGoal(res: SimulationResult, goal: Goal): boolean {
+export function meetsGoal(res: SimulationResult, cfg: SimulationConfig): boolean {
+  const goal = cfg.goal;
   if (!hasTargets(goal)) return false;
-  if ((goal.wealth ?? 0) > 0 && wealthOf(res, goal) < goal.wealth!) return false;
-  if ((goal.monthlyDividend ?? 0) > 0 && dividendOf(res, goal) < goal.monthlyDividend!) return false;
+  const snap = goalSnapshot(res, cfg);
+  const wealth = goal.wealthBasis === 'real' ? snap.wealthReal : snap.wealth;
+  const dividend = goal.dividendBasis === 'real' ? snap.dividendReal : snap.dividend;
+  if ((goal.wealth ?? 0) > 0 && wealth < goal.wealth!) return false;
+  if ((goal.monthlyDividend ?? 0) > 0 && dividend < goal.monthlyDividend!) return false;
   return true;
 }
 
@@ -54,10 +87,12 @@ function roundUp(variable: GoalVariable, x: number) {
 
 /** Smallest value of `variable` that meets all targets, assuming the outcome grows with it. */
 export function solveGoal(cfg: SimulationConfig, variable: GoalVariable): number | null {
-  const goal = cfg.goal;
-  if (!hasTargets(goal)) return null;
+  if (!hasTargets(cfg.goal)) return null;
   let [lo, hi] = RANGE[variable];
-  const meets = (x: number) => meetsGoal(runSimulation(withVariable(cfg, variable, x)), goal);
+  const meets = (x: number) => {
+    const c = withVariable(cfg, variable, x);
+    return meetsGoal(runSimulation(c), c);
+  };
   if (!meets(hi)) return null;
   if (meets(lo)) return lo;
   for (let i = 0; i < 45; i++) {
@@ -76,12 +111,16 @@ export function evaluateGoal(cfg: SimulationConfig, res: SimulationResult): Goal
 
   const wantWealth = (goal.wealth ?? 0) > 0;
   const wantDiv = (goal.monthlyDividend ?? 0) > 0;
+  const snap = goalSnapshot(res, cfg);
 
-  const reached = res.rows.find((r) => {
+  const reached = snap.rows.find((r) => {
     const w = goal.wealthBasis === 'real' ? r.realValueEnd : r.valueEnd;
     const d = goal.dividendBasis === 'real' ? r.realMonthlyDividendNet : r.monthlyDividendNet;
     return (!wantWealth || w >= goal.wealth!) && (!wantDiv || d >= goal.monthlyDividend!);
   });
+
+  const wealth = goal.wealthBasis === 'real' ? snap.wealthReal : snap.wealth;
+  const dividend = goal.dividendBasis === 'real' ? snap.dividendReal : snap.dividend;
 
   return {
     variable: goal.solveFor,
@@ -89,8 +128,9 @@ export function evaluateGoal(cfg: SimulationConfig, res: SimulationResult): Goal
     currentValue: currentOf(cfg, goal.solveFor),
     reachedYear: reached?.year ?? null,
     reachedAge: reached?.age ?? null,
-    wealthProgress: wantWealth ? wealthOf(res, goal) / goal.wealth! : null,
-    dividendProgress: wantDiv ? dividendOf(res, goal) / goal.monthlyDividend! : null,
+    wealthProgress: wantWealth ? wealth / goal.wealth! : null,
+    dividendProgress: wantDiv ? dividend / goal.monthlyDividend! : null,
     hasSteps: cfg.savingsSteps.length > 0,
+    atWithdrawal: snap.atWithdrawal,
   };
 }

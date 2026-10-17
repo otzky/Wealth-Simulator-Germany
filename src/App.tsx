@@ -101,6 +101,24 @@ export default function App() {
     `${formatPercent(config.totalReturn)} Rendite`,
     `${formatPercent(config.inflation)} Inflation`,
     `${formatPercent(config.ter)} TER`,
+    ...(config.dividendYield > 0 && config.dividendStrategy !== 'reinvest'
+      ? [
+          config.dividendStrategy === 'payout'
+            ? 'Dividenden ausgezahlt'
+            : config.dividendStrategy === 'fromYear'
+              ? `Dividenden ab ${config.dividendPayoutYear} ausgezahlt`
+              : config.withdrawal.enabled
+                ? `Dividenden ab ${config.withdrawal.startYear} ausgezahlt`
+                : 'Dividenden reinvestiert',
+        ]
+      : []),
+    ...(config.withdrawal.enabled
+      ? [
+          `Entnahme ab ${config.withdrawal.startYear}: ${
+            config.withdrawal.mode === 'fixed' ? `${formatEuro(config.withdrawal.monthlyNet)}/Monat` : `${formatPercent(config.withdrawal.rate)} p. a.`
+          }`,
+        ]
+      : []),
   ];
 
   return (

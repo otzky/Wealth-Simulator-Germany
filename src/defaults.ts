@@ -23,7 +23,8 @@ export function defaultConfig(): SimulationConfig {
     totalReturn: 7,
     dividendYield: 2,
     inflation: 2,
-    reinvestDividends: true,
+    dividendStrategy: 'reinvest',
+    dividendPayoutYear: 1990 + 67,
     returnSpread: 2,
 
     purchaseFee: 0.2,
@@ -36,6 +37,17 @@ export function defaultConfig(): SimulationConfig {
     fundType: 'equity',
     applyAdvanceLumpSum: true,
     baseRate: 3.2, // Basiszins 2026 (BMF)
+
+    withdrawal: {
+      enabled: false,
+      startYear: 1990 + 67,
+      mode: 'fixed',
+      monthlyNet: 2000,
+      rate: 4,
+      inflationAdjust: true,
+      stopContributions: true,
+      countDividends: true,
+    },
 
     goal: {
       enabled: false,

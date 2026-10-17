@@ -22,6 +22,7 @@
   --series-1: #2a78d6; /* Depotwert */
   --series-2: #eb6834; /* Einzahlungen */
   --series-3: #1baf7a; /* Dividenden */
+  --series-4: #6250d6; /* Entnahmen */
 
   --good: #006300;
   --good-soft: #e5f4e5;
@@ -51,6 +52,7 @@
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
+    --series-4: #9085e9;
     --good: #0ca30c;
     --good-soft: #142614;
     --critical: #e66767;
@@ -78,6 +80,7 @@
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
+  --series-4: #9085e9;
   --good: #0ca30c;
   --good-soft: #142614;
   --critical: #e66767;
@@ -103,6 +106,7 @@
   --color-series-1: var(--series-1);
   --color-series-2: var(--series-2);
   --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
   --color-good: var(--good);
   --color-good-soft: var(--good-soft);
   --color-critical: var(--critical);
