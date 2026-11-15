@@ -52,6 +52,7 @@ export function defaultConfig(): SimulationConfig {
       lifeExpectancy: 90,
       endWealth: 0,
       endWealthBasis: 'nominal',
+      guardrails: { enabled: false, direction: 'down', threshold: 20, adjust: 10, floor: 0 },
     },
 
     monteCarlo: {

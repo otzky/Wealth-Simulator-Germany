@@ -122,7 +122,13 @@ export default function App() {
         ]
       : []),
     ...(eventCount ? [`${eventCount} ${eventCount === 1 ? 'Ereignis' : 'Ereignisse'}`] : []),
-    ...(config.monteCarlo.enabled ? [`Monte Carlo: ${formatPercent(config.monteCarlo.volatility)} Volatilität`] : []),
+    ...(config.monteCarlo.enabled
+      ? [
+          `Monte Carlo: ${formatPercent(config.monteCarlo.volatility)} Volatilität${
+            config.withdrawal.enabled && config.withdrawal.mode !== 'rate' && config.withdrawal.guardrails.enabled ? ', Leitplanken' : ''
+          }`,
+        ]
+      : []),
     ...(config.withdrawal.enabled
       ? [
           `Entnahme ab ${config.withdrawal.startYear}: ${

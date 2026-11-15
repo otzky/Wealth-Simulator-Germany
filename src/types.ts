@@ -8,6 +8,22 @@ export type WithdrawalMode = 'fixed' | 'rate' | 'target';
 /** What happens with distributions: reinvest, pay out, or switch from reinvesting to paying out. */
 export type DividendStrategy = 'reinvest' | 'payout' | 'withWithdrawal' | 'fromYear';
 
+/**
+ * Guardrails (after Guyton-Klinger): once a year the withdrawal is cut or raised when markets
+ * have moved the depot far away from the plan. Only takes effect with fluctuating returns.
+ */
+export interface GuardrailConfig {
+  enabled: boolean;
+  /**
+   * 'down': only cut; in good years the plan is paid, and after a cut the amount returns to the
+   * plan as soon as the depot is back on track. 'both': cut and raise (Guyton-Klinger).
+   */
+  direction: 'down' | 'both';
+  threshold: number; // % deviation of the withdrawal rate from the plan's rate that triggers an adjustment
+  adjust: number; // % by which the withdrawal is cut or raised
+  floor: number; // net per month that is never undercut (money of the start year, grows with inflation if adjusted); 0 = none
+}
+
 export interface WithdrawalConfig {
   enabled: boolean;
   startYear: number; // withdrawals start in January of this calendar year
@@ -20,6 +36,7 @@ export interface WithdrawalConfig {
   lifeExpectancy: number; // 'target': the plan runs until this age
   endWealth: number; // 'target': depot value that should be left at that age (e.g. to bequeath)
   endWealthBasis: ValueBasis; // 'target': endWealth as a nominal amount or in today's purchasing power
+  guardrails: GuardrailConfig; // 'fixed'/'target': adjust the amount to the markets (Monte Carlo only)
 }
 
 /** From the given calendar year onward, the monthly savings rate changes to `monthlyAmount`. */
@@ -209,7 +226,17 @@ export interface WithdrawalSummary {
   depletedYear: number | null;
   depletedAge: number | null;
   shortfall: boolean; // at least one month could not be paid in full ('fixed' amounts)
+  guardrails: GuardrailStats | null; // set when guardrails were in effect
   target: WithdrawalTarget | null; // set in 'target' mode
+}
+
+export interface GuardrailStats {
+  cuts: number;
+  raises: number;
+  minLevel: number; // lowest amount relative to the planned amount, e.g. 0.81
+  yearsBelow: number; // years with less than the planned amount
+  longestBelow: number; // longest run of consecutive years below the plan
+  missing: number; // sum of all cuts: planned minus paid, in money of the start year (with inflation adjustment)
 }
 
 /** Result of the 'target' mode: the withdrawal that leaves the wanted wealth at the end. */

@@ -58,6 +58,19 @@ export function sanitize(input: unknown): SimulationConfig {
   if (!['equity', 'mixed', 'other'].includes(cfg.fundType)) cfg.fundType = 'equity';
   if (!['years', 'age'].includes(cfg.durationMode)) cfg.durationMode = 'years';
   if (!['fixed', 'rate', 'target'].includes(cfg.withdrawal.mode)) cfg.withdrawal.mode = 'fixed';
+  {
+    // Nested one level deeper than the other settings
+    const d = base.withdrawal.guardrails;
+    const g = (cfg.withdrawal.guardrails && typeof cfg.withdrawal.guardrails === 'object' ? cfg.withdrawal.guardrails : {}) as Record<string, unknown>;
+    const num = (v: unknown, def: number, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
+    cfg.withdrawal.guardrails = {
+      enabled: typeof g.enabled === 'boolean' ? g.enabled : d.enabled,
+      direction: g.direction === 'both' || g.direction === 'down' ? g.direction : d.direction,
+      threshold: num(g.threshold, d.threshold, 1, 100),
+      adjust: num(g.adjust, d.adjust, 1, 50),
+      floor: num(g.floor, d.floor, 0, 1e9),
+    };
+  }
   if (!['nominal', 'real'].includes(cfg.withdrawal.endWealthBasis)) cfg.withdrawal.endWealthBasis = 'nominal';
   if (![1000, 5000].includes(cfg.monteCarlo.runs)) cfg.monteCarlo.runs = 1000;
   cfg.monteCarlo.volatility = Math.min(100, Math.max(0, cfg.monteCarlo.volatility));

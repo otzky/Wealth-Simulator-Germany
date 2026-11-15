@@ -6,7 +6,7 @@ import type { MonteCarloResult } from '../lib/montecarlo';
 import { canSolveSafeWithdrawal, quantile } from '../lib/montecarlo';
 import { safeKey, type McState, type SafeState } from '../lib/useMonteCarlo';
 import { formatAxis, formatEuro, formatEuroCompact, formatNumber, formatPercent } from '../lib/format';
-import { Button, Card, CardHeader, Hint, Segmented, cx } from './ui';
+import { Button, Card, CardHeader, Hint, NumberField, Segmented, Switch, cx } from './ui';
 import { LegendItem } from './Charts';
 import PathsChart from './PathsChart';
 
@@ -134,6 +134,7 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
                   : 'werden alle geplanten Entnahmen voll bezahlt.'
                 : 'ist am Ende mehr da als eingezahlt.'}
             </p>
+            {r.guardrails && <GuardrailBreakdown g={r.guardrails} />}
             {target && target.endWealth > 0 && <TargetBreakdown r={r} target={target} age={w.lifeExpectancy} />}
             {target && (
               <p className="mt-2 text-xs text-muted">
@@ -190,12 +191,15 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
         </p>
       </Card>
 
+      {canSolveSafeWithdrawal(config) && <GuardrailCard g={r.guardrails} config={config} onChange={onChange} />}
+
       <div className="grid gap-5 2xl:grid-cols-2">
         <FanCard r={r} real={real} />
         <HistogramCard r={r} real={real} target={target?.reachable && target.endWealth > 0 ? target : null} />
       </div>
 
       {r.items.length > 0 && <ItemsCard config={config} plan={plan} r={r} depleted={depleted} />}
+
 
       {canSolveSafeWithdrawal(config) && <SafeCard config={config} plan={plan} safe={safe} onChange={onChange} />}
 
@@ -478,7 +482,7 @@ function ItemsCard({
         w.mode === 'rate'
           ? `${formatPercent(w.rate)} p. a.`
           : `${formatEuro(w.mode === 'target' ? (plan.summary.withdrawal?.target?.monthlyNet ?? 0) : w.monthlyNet)} netto/Monat${w.mode === 'target' ? ' (berechnet)' : ''}`;
-      return { title: `Entnahmephase ab ${w.startYear}`, sub: amount };
+      return { title: `Entnahmephase ab ${w.startYear}`, sub: amount + (r.guardrails ? ', mit Leitplanken' : '') };
     }
     if (it.kind === 'oneOff') {
       const o = config.oneOffWithdrawals.find((x) => x.id === it.id);
@@ -531,6 +535,190 @@ function ItemsCard({
           )}
         </p>
       </div>
+    </Card>
+  );
+}
+
+/** Splits the success rate by whether the guardrails had to cut, and compares with no guardrails. */
+function GuardrailBreakdown({ g }: { g: NonNullable<MonteCarloResult['guardrails']> }) {
+  const failed = Math.max(0, 1 - g.successNoCut - g.successWithCut);
+  const parts = [
+    { key: 'clean', label: 'Aufgegangen, immer nach Plan', share: g.successNoCut, color: 'bg-good' },
+    { key: 'cut', label: 'Aufgegangen, zeitweise unter Plan', share: g.successWithCut, color: 'bg-accent' },
+    { key: 'fail', label: 'Gescheitert', share: failed, color: 'bg-critical' },
+  ];
+  const diff = g.successNoCut + g.successWithCut - g.successWithout;
+  return (
+    <div className="mt-4 rounded-xl bg-surface-2 px-4 py-3">
+      <p className="text-xs font-medium text-ink-2">Mit Leitplanken – wie oft wird weniger ausgezahlt als geplant?</p>
+      <div className="mt-2 flex h-2.5 overflow-hidden rounded-full bg-surface-3" aria-hidden>
+        {parts.map((p) => (p.share > 0 ? <div key={p.key} className={p.color} style={{ width: `${p.share * 100}%` }} /> : null))}
+      </div>
+      <ul className="mt-2 grid gap-y-1 text-xs text-ink-2">
+        {parts.map((p) => (
+          <li key={p.key} className="flex items-center gap-1.5">
+            <span className={cx('size-2 shrink-0 rounded-full', p.color)} />
+            <span>{p.label}</span>
+            <span className="tnum ml-auto font-medium whitespace-nowrap text-ink">{pct0(p.share)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 border-t border-line pt-2 text-xs text-ink-2">
+        Ohne Leitplanken ginge der Plan in <span className="tnum font-medium text-ink">{pct0(g.successWithout)}</span> der Verläufe auf
+        {Math.abs(diff) >= 0.001 && (
+          <>
+            {' '}
+            – die Leitplanken {diff > 0 ? 'retten' : 'kosten'} <span className="tnum font-medium text-ink">{formatNumber(Math.round(Math.abs(diff) * 1000) / 10)}</span>{' '}
+            Prozentpunkte
+          </>
+        )}
+        .
+      </p>
+    </div>
+  );
+}
+
+const BUCKETS = [
+  { label: 'Nie', color: 'var(--good)' },
+  { label: '1–2 Jahre', color: 'var(--accent)' },
+  { label: '3–5 Jahre', color: 'var(--series-4)' },
+  { label: '6–10 Jahre', color: 'var(--series-2)' },
+  { label: 'über 10 Jahre', color: 'var(--critical)' },
+];
+
+/** Switch and settings for guardrails, with how often and how long they cut in the simulated paths. */
+function GuardrailCard({
+  g,
+  config,
+  onChange,
+}: {
+  g: MonteCarloResult['guardrails'];
+  config: SimulationConfig;
+  onChange: (p: Partial<SimulationConfig>) => void;
+}) {
+  const w = config.withdrawal;
+  const gc = w.guardrails;
+  const setG = (patch: Partial<SimulationConfig['withdrawal']['guardrails']>) => onChange({ withdrawal: { ...w, guardrails: { ...gc, ...patch } } });
+  const pctOf = (v: number) => `${formatNumber(Math.round(v * 100))} %`;
+  const years = (n: number) => `${formatNumber(n)} ${n === 1 ? 'Jahr' : 'Jahre'}`;
+  const money = w.inflationAdjust ? `in Euro von ${w.startYear}` : 'nominal';
+  return (
+    <Card>
+      <div className="px-5 pt-5 sm:px-6">
+        <Switch
+          label={<span className="text-[15px] font-semibold text-ink">Leitplanken: Entnahme an die Märkte anpassen</span>}
+          description={
+            'Jeden Januar wird geprüft, ob das Depot den geplanten Betrag bis zum Ende noch tragen kann – aus Depotwert, Restlaufzeit, erwarteter Rendite nach Kosten, Steuern und Restvermögen. Liegt der Betrag um mehr als den Auslöser über dem tragfähigen, wird er für das Jahr gekürzt. ' +
+            (gc.direction === 'down'
+              ? `In guten Jahren wird nach Plan ausgezahlt, das Plus bleibt im Depot. Eine Kürzung bleibt, bis das Depot den vollen Betrag wieder tragen kann (höchstens ${Math.round(gc.threshold / 2)} % darüber), dann gilt wieder der volle Betrag.`
+              : 'Liegt er um mehr als den Auslöser darunter, wird erhöht. Eine Kürzung bleibt bestehen, bis eine Erhöhung ausgelöst wird.') +
+            ' Nach einem Verlustjahr entfällt der Inflationsausgleich. Der Plan-Tab bleibt unverändert, weil es dort keine schlechten Jahre gibt.'
+          }
+          checked={gc.enabled}
+          onChange={(v) => setG({ enabled: v })}
+        />
+      </div>
+      {gc.enabled && (
+        <>
+          <div className="px-5 pt-4 sm:px-6">
+            <Segmented
+              aria-label="Richtung der Leitplanken"
+              size="sm"
+              value={gc.direction}
+              onChange={(v) => setG({ direction: v })}
+              className="w-full sm:w-fit"
+              options={[
+                { value: 'down', label: 'Nur kürzen, sonst nach Plan' },
+                { value: 'both', label: 'Kürzen und erhöhen (Guyton-Klinger)' },
+              ]}
+            />
+          </div>
+          <div className="grid gap-3 px-5 pt-4 sm:grid-cols-3 sm:px-6">
+            <NumberField
+              label="Auslöser"
+              hint="Liegt der geplante Betrag um mehr als diesen Wert über dem, was das Depot bis zum Ende tragen kann, wird gekürzt. Guyton und Klinger verwenden 20 %."
+              value={gc.threshold}
+              onChange={(v) => setG({ threshold: Math.min(100, Math.max(1, v ?? 20)) })}
+              suffix="%"
+              min={1}
+              max={100}
+            />
+            <NumberField
+              label="Kürzung"
+              hint={gc.direction === 'both' ? 'Um so viel wird gekürzt bzw. erhöht. Guyton und Klinger verwenden 10 %.' : 'Um so viel wird jeweils gekürzt. Guyton und Klinger verwenden 10 %.'}
+              value={gc.adjust}
+              onChange={(v) => setG({ adjust: Math.min(50, Math.max(1, v ?? 10)) })}
+              suffix="%"
+              min={1}
+              max={50}
+            />
+            <NumberField
+              label="Mindestbetrag / Monat"
+              hint={`Netto, in Euro von ${w.startYear}${w.inflationAdjust ? ', wächst mit der Inflation' : ''}. Darunter wird nie gekürzt – reicht das Depot dafür nicht, gilt der Verlauf als gescheitert. 0 € = keine Untergrenze.`}
+              value={gc.floor}
+              onChange={(v) => setG({ floor: v ?? 0 })}
+              suffix="€"
+              min={0}
+            />
+          </div>
+          {g ? (
+            <div className="px-5 pt-5 pb-5 sm:px-6">
+              <p className="text-[13px] font-medium text-ink">Wie viele Jahre liegt die Entnahme unter dem Plan?</p>
+              <div className="mt-2 flex h-3 overflow-hidden rounded-full bg-surface-3" aria-hidden>
+                {g.yearsBelowBuckets.map((share, i) =>
+                  share > 0 ? <div key={i} style={{ width: `${share * 100}%`, background: BUCKETS[i].color }} /> : null,
+                )}
+              </div>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
+                {g.yearsBelowBuckets.map((share, i) => (
+                  <li key={i} className="flex items-center gap-1.5">
+                    <span className="size-2 shrink-0 rounded-full" style={{ background: BUCKETS[i].color }} />
+                    {BUCKETS[i].label}
+                    <span className="tnum font-medium text-ink">{pct0(share)}</span>
+                  </li>
+                ))}
+              </ul>
+              <dl className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+                <Mini label="Jahre unter Plan" hint="In 90 % der Verläufe liegt die Entnahme insgesamt höchstens so viele Jahre unter dem Plan." value={`≤ ${years(g.yearsBelowP90)}`} />
+                <Mini label="Am Stück" hint="In 90 % der Verläufe dauert die längste Phase unter dem Plan höchstens so lange." value={`≤ ${years(g.longestBelowP90)}`} />
+                <Mini
+                  label="Tiefststand"
+                  hint="In 90 % der Verläufe sinkt die Entnahme nie unter diesen Anteil des geplanten Betrags."
+                  value={pctOf(g.minLevelP10)}
+                  tone="bad"
+                />
+                <Mini
+                  label="Puffer"
+                  hint={`Alle Kürzungen eines Verlaufs zusammengerechnet (${money}). In 90 % der Verläufe reicht dieser Betrag, um jede Kürzung auszugleichen.`}
+                  value={formatEuroCompact(g.missingP90)}
+                />
+              </dl>
+              <p className="mt-3 text-[13px] leading-snug text-ink-2">
+                Geplant sind {formatEuro(g.plannedMonthly)} netto im Monat ab {g.startYear}
+                {w.inflationAdjust ? ', danach mit der Inflation steigend' : ''}. Geprüft wird jeden Januar, eine Kürzung gilt also mindestens ein Jahr.
+                In 90 % der Verläufe liegst du insgesamt höchstens <span className="tnum font-medium text-ink">{years(g.yearsBelowP90)}</span> unter
+                dem Plan, davon höchstens <span className="tnum font-medium text-ink">{years(g.longestBelowP90)}</span> am Stück, und die Entnahme sinkt
+                nie unter <span className="tnum font-medium text-ink">{pctOf(g.minLevelP10)}</span> des Plans (im ersten Jahr wären das{' '}
+                {formatEuro(g.plannedMonthly * g.minLevelP10)}).{' '}
+                {g.missingP90 > 0.5 ? (
+                  <>
+                    Alle Kürzungen zusammen machen dann höchstens <span className="tnum font-medium text-ink">{formatEuro(g.missingP90)}</span> aus ({money}) – ein
+                    Puffer in dieser Höhe, z. B. auf dem Tagesgeld, gleicht sie aus.
+                  </>
+                ) : (
+                  'Ein Puffer ist dafür nicht nötig.'
+                )}
+                {gc.floor > 0 && ` Der Mindestbetrag von ${formatEuro(gc.floor)} wird nie unterschritten.`}
+              </p>
+            </div>
+          ) : (
+            <p className="flex items-center gap-2 px-5 pt-3 pb-5 text-[13px] text-muted sm:px-6">
+              <Loader2 size={14} className="animate-spin text-accent" /> Wird berechnet …
+            </p>
+          )}
+        </>
+      )}
+      {!gc.enabled && <div className="pb-5" />}
     </Card>
   );
 }
@@ -599,6 +787,13 @@ function SafeCard({
                   Entnahmen in mindestens {formatNumber(p * 100)} % der Verläufe voll bezahlt
                   {w.inflationAdjust ? ', danach jährlich an die Inflation angepasst' : ''}. Aktuell geplant: {formatEuro(current)}
                   {isTarget ? ' (berechnet ohne Schwankungen)' : ''}.
+                  {res.minLevelP10 != null && (
+                    <>
+                      {' '}
+                      Mit Leitplanken ist das der Startbetrag: In den schlechtesten 10 % der Verläufe sinkt er zeitweise auf{' '}
+                      <span className="font-medium text-ink">{formatEuro(res.monthlyNet * res.minLevelP10)}</span> ({formatNumber(Math.round(res.minLevelP10 * 100))} %).
+                    </>
+                  )}
                 </p>
               </div>
               <Button size="sm" onClick={() => adopt(res.monthlyNet)} disabled={!isTarget && res.monthlyNet === w.monthlyNet}>

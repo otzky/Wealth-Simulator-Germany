@@ -670,6 +670,11 @@ function WithdrawalSection({
             checked={w.inflationAdjust}
             onChange={(v) => setW({ inflationAdjust: v })}
           />
+          {amountMode && (
+            <p className="-mt-1 text-xs leading-snug text-muted">
+              Wie gut der Betrag schwankende Märkte übersteht – und ob Leitplanken helfen, die in schlechten Jahren kürzen – zeigt der Tab „Monte Carlo“.
+            </p>
+          )}
           <Switch
             label="Sparrate ab Beginn stoppen"
             description="Keine monatlichen Einzahlungen mehr während der Entnahme. Einmalzahlungen bleiben bestehen."

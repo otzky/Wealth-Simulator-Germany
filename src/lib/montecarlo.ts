@@ -1,7 +1,7 @@
 import type { SimulationConfig, SimulationResult } from '../types';
 import { meetsGoal } from './goal';
 import { normalGenerator, pathSeed } from './random';
-import { horizonMonths, resolveWithdrawal, simulate, usesLifeExpectancy, withdrawalActive, withFixedWithdrawal } from './simulation';
+import { guardrailGuide, horizonMonths, resolveWithdrawal, simulate, usesLifeExpectancy, withdrawalActive, withFixedWithdrawal } from './simulation';
 
 /**
  * Monte Carlo: the same plan, simulated many times with random monthly returns.
@@ -38,14 +38,39 @@ export interface MonteCarloResult {
   successRate: number;
   goalRate: number | null; // share of paths that reach the goal (section "Ziel"), if one is set
   items: McItem[];
+  guardrails: McGuardrails | null; // set when guardrails are on for the withdrawal phase
   volatility: number;
   ms: number;
+}
+
+export interface McGuardrails {
+  plannedMonthly: number; // planned net amount per month in the first withdrawal year
+  startYear: number;
+  cutShare: number; // share of paths with at least one cut
+  raiseShare: number; // share of paths with at least one raise
+  minLevelP10: number; // in 90 % of paths the amount never falls below this share of the planned amount
+  minLevelMedian: number;
+  yearsBelowMedian: number; // years below the planned amount, median over the paths with a cut
+  cutsMedian: number; // number of cuts, median over the paths with a cut
+  direction: 'down' | 'both';
+  inflationAdjust: boolean; // amounts below are in money of the start year if true, nominal otherwise
+  /** Share of paths by number of years below the plan: 0, 1–2, 3–5, 6–10, more than 10 */
+  yearsBelowBuckets: number[];
+  yearsBelowP90: number; // in 90 % of paths at most this many years below the plan
+  longestBelowP90: number; // in 90 % of paths the longest run below the plan is at most this long
+  longestBelowMedian: number; // median over the paths with a cut
+  missingP90: number; // in 90 % of paths all cuts together are at most this much (buffer)
+  missingMedian: number; // median over the paths with a cut
+  successNoCut: number; // share of paths that succeed and always pay the planned amount
+  successWithCut: number; // share of paths that succeed with years below the planned amount
+  successWithout: number; // success rate of the same paths without guardrails
 }
 
 export interface SafeWithdrawal {
   probability: number;
   monthlyNet: number;
   reachable: boolean; // false: even without withdrawals the plan does not hold often enough
+  minLevelP10: number | null; // with guardrails: in 90 % of paths the amount never falls below this share
   runs: number;
   ms: number;
 }
@@ -134,6 +159,7 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
   // so the paths show how well that amount holds when markets fluctuate.
   const plan = resolveWithdrawal(cfg);
   const base = simulate(plan);
+  const guide = guardrailGuide(cfg); // only used when guardrails are on
   const judge = judgeFor(cfg, plan, base);
   const runs = Math.max(1, Math.round(cfg.monteCarlo.runs));
   const years = base.rows.length;
@@ -149,9 +175,44 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
   let successes = 0;
   let goals = 0;
   const shocks = new Float64Array(months);
+  const minLevels: number[] = [];
+  const yearsBelow: number[] = [];
+  const cutCounts: number[] = [];
+  const yearsAll: number[] = [];
+  const longestAll: number[] = [];
+  const longestCut: number[] = [];
+  const missingAll: number[] = [];
+  const missingCut: number[] = [];
+  let cutPaths = 0;
+  let raisePaths = 0;
+  let successNoCut = 0;
+  let successWithCut = 0;
+  let successWithout = 0;
+  // The same plan without guardrails, to show what they change on exactly the same paths
+  const gr = plan.withdrawal.guardrails;
+  const guarded = gr.enabled && plan.withdrawal.mode !== 'rate' && withdrawalActive(plan);
+  const unguarded: SimulationConfig = { ...plan, withdrawal: { ...plan.withdrawal, guardrails: { ...gr, enabled: false } } };
 
   for (let r = 0; r < runs; r++) {
-    const res = simulate(plan, pathShocks(cfg, r, months, shocks));
+    const res = simulate(plan, pathShocks(cfg, r, months, shocks), guide);
+    const g = res.summary.withdrawal?.guardrails;
+    if (g) {
+      minLevels.push(g.minLevel);
+      yearsAll.push(g.yearsBelow);
+      longestAll.push(g.longestBelow);
+      missingAll.push(g.missing);
+      if (g.yearsBelow) {
+        longestCut.push(g.longestBelow);
+        missingCut.push(g.missing);
+      }
+      if (g.cuts) {
+        cutPaths++;
+        yearsBelow.push(g.yearsBelow);
+        cutCounts.push(g.cuts);
+      }
+      if (g.raises) raisePaths++;
+    }
+    if (guarded && judge.ok(simulate(unguarded, shocks))) successWithout++;
     let hadValue = false;
     for (let j = 0; j < years; j++) {
       const row = res.rows[j];
@@ -164,6 +225,8 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
     if (judge.ok(res)) {
       success[r] = 1;
       successes++;
+      if (g?.yearsBelow) successWithCut++;
+      else successNoCut++;
     }
     if (wantGoal && meetsGoal(res, plan)) goals++;
     judge.items.forEach((it, k) => {
@@ -201,6 +264,36 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
     successRate: successes / runs,
     goalRate: wantGoal ? goals / runs : null,
     items: judge.items.map((it, k) => ({ ...it, paidRate: paid[k] / runs })),
+    guardrails: minLevels.length
+      ? (() => {
+          const lv = Float64Array.from(minLevels).sort();
+          const yb = Float64Array.from(yearsBelow).sort();
+          const sorted = (a: number[]) => Float64Array.from(a).sort();
+          const q = (a: number[], p: number) => (a.length ? quantile(sorted(a), p) : 0);
+          const bucket = (lo: number, hi: number) => yearsAll.filter((y) => y >= lo && y <= hi).length / runs;
+          return {
+            plannedMonthly: plan.withdrawal.monthlyNet,
+            startYear: plan.withdrawal.startYear,
+            cutShare: cutPaths / runs,
+            raiseShare: raisePaths / runs,
+            minLevelP10: quantile(lv, 0.1),
+            minLevelMedian: quantile(lv, 0.5),
+            yearsBelowMedian: yb.length ? quantile(yb, 0.5) : 0,
+            cutsMedian: cutCounts.length ? quantile(Float64Array.from(cutCounts).sort(), 0.5) : 0,
+            successNoCut: successNoCut / runs,
+            successWithCut: successWithCut / runs,
+            successWithout: successWithout / runs,
+            direction: gr.direction,
+            inflationAdjust: plan.withdrawal.inflationAdjust,
+            yearsBelowBuckets: [bucket(0, 0), bucket(1, 2), bucket(3, 5), bucket(6, 10), bucket(11, Infinity)],
+            yearsBelowP90: Math.round(q(yearsAll, 0.9)),
+            longestBelowP90: Math.round(q(longestAll, 0.9)),
+            longestBelowMedian: Math.round(q(longestCut, 0.5)),
+            missingP90: q(missingAll, 0.9),
+            missingMedian: q(missingCut, 0.5),
+          };
+        })()
+      : null,
     volatility: cfg.monteCarlo.volatility,
     ms: now() - t0,
   };
@@ -227,11 +320,13 @@ export function solveSafeWithdrawal(cfg: SimulationConfig, probability: number, 
 
   const holds = (x: number) => {
     const plan = withFixedWithdrawal(cfg, x);
-    const judge = judgeFor(cfg, plan, simulate(plan));
+    const base = simulate(plan);
+    const guide = guardrailGuide(cfg, x);
+    const judge = judgeFor(cfg, plan, base);
     let ok = 0;
     let bad = 0;
     for (let r = 0; r < runs; r++) {
-      if (judge.ok(simulate(plan, shocks[r]))) ok++;
+      if (judge.ok(simulate(plan, shocks[r], guide))) ok++;
       else bad++;
       if (ok >= needed) break;
       if (bad > runs - needed) break;
@@ -241,7 +336,23 @@ export function solveSafeWithdrawal(cfg: SimulationConfig, probability: number, 
     return ok >= needed;
   };
 
-  const done = (monthlyNet: number, reachable: boolean): SafeWithdrawal => ({ probability, monthlyNet, reachable, runs, ms: now() - t0 });
+  // With guardrails the amount moves; say how low it gets in bad paths at the amount found.
+  const lowest = (x: number) => {
+    const plan = withFixedWithdrawal(cfg, x);
+    if (!plan.withdrawal.guardrails.enabled) return null;
+    const guide = guardrailGuide(cfg, x);
+    const lv = new Float64Array(runs);
+    for (let r = 0; r < runs; r++) lv[r] = simulate(plan, shocks[r], guide).summary.withdrawal?.guardrails?.minLevel ?? 1;
+    return quantile(lv.sort(), 0.1);
+  };
+  const done = (monthlyNet: number, reachable: boolean): SafeWithdrawal => ({
+    probability,
+    monthlyNet,
+    reachable,
+    minLevelP10: reachable && monthlyNet > 0 ? lowest(monthlyNet) : null,
+    runs,
+    ms: now() - t0,
+  });
   if (!holds(0)) return done(0, false);
   let lo = 0;
   let hi = 1000;

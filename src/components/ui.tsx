@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Info } from 'lucide-react';
 import { formatNumber, parseNumber } from '../lib/format';
 
@@ -26,23 +27,54 @@ export function CardHeader({ title, subtitle, actions }: { title: ReactNode; sub
   );
 }
 
+/**
+ * Info icon with an explanation. The tooltip is rendered into <body> with fixed positioning,
+ * so scrolling containers such as the settings sidebar cannot cut it off.
+ */
 export function Hint({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const tip = useRef<HTMLSpanElement>(null);
+  const id = useId();
+
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (!btn.current?.contains(e.target as Node) && !tip.current?.contains(e.target as Node)) setOpen(false);
     };
+    const hide = () => setOpen(false);
     document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('scroll', hide, true);
+      window.removeEventListener('resize', hide);
+    };
   }, [open]);
+
+  // Place above the icon, or below if there is no room; keep it inside the window.
+  useLayoutEffect(() => {
+    if (!open || !btn.current || !tip.current) return setPos(null);
+    const b = btn.current.getBoundingClientRect();
+    const t = tip.current.getBoundingClientRect();
+    const gap = 8;
+    const margin = 8;
+    const left = Math.min(window.innerWidth - t.width - margin, Math.max(margin, b.left + b.width / 2 - t.width / 2));
+    const above = b.top - gap - t.height;
+    const top = above >= margin ? above : Math.min(window.innerHeight - t.height - margin, b.bottom + gap);
+    setPos({ left, top });
+  }, [open]);
+
   return (
-    <span ref={ref} className="relative inline-flex">
+    <span className="relative inline-flex">
       <button
+        ref={btn}
         type="button"
         aria-label="Erklärung"
         aria-expanded={open}
+        aria-describedby={open ? id : undefined}
         onClick={() => setOpen((o) => !o)}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
@@ -50,14 +82,19 @@ export function Hint({ children }: { children: ReactNode }) {
       >
         <Info size={13} />
       </button>
-      {open && (
-        <span
-          role="tooltip"
-          className="absolute bottom-full left-1/2 z-30 mb-2 w-64 -translate-x-1/2 rounded-lg border border-line bg-surface px-3 py-2 text-xs leading-relaxed font-normal text-ink-2 shadow-card"
-        >
-          {children}
-        </span>
-      )}
+      {open &&
+        createPortal(
+          <span
+            ref={tip}
+            id={id}
+            role="tooltip"
+            className="pointer-events-none fixed z-50 w-64 max-w-[calc(100vw-16px)] rounded-lg border border-line bg-surface px-3 py-2 text-xs leading-relaxed font-normal text-ink-2 shadow-card"
+            style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: 0, visibility: 'hidden' }}
+          >
+            {children}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }

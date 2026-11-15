@@ -166,6 +166,41 @@ export function solveWithdrawal(cfg: SimulationConfig): WithdrawalTarget | null 
 }
 
 /** The plan with a fixed net withdrawal of `monthlyNet` (in 'target' mode still ending at the life expectancy). */
+/**
+ * What guardrails need to know about the plan: the share of a sale that is paid out after tax
+ * in each calendar year (taken from the plan without fluctuations) and the nominal wealth that
+ * should be left at the end.
+ */
+export interface GuardrailGuide {
+  netShare: Float64Array;
+  endWealth: number;
+}
+
+/** Guide for the guardrails of a plan as entered (a calculated withdrawal keeps its wanted rest). */
+export function guardrailGuide(cfg: SimulationConfig, monthlyNet?: number): GuardrailGuide {
+  const res = simulate(monthlyNet == null ? resolveWithdrawal(cfg) : withFixedWithdrawal(cfg, monthlyNet));
+  const w = cfg.withdrawal;
+  let endWealth = 0;
+  if (usesLifeExpectancy(cfg)) {
+    endWealth = Math.max(0, w.endWealth) * (w.endWealthBasis === 'real' ? res.summary.deflator : 1);
+  }
+  return { netShare: Float64Array.from(res.rows, (r) => (r.withdrawalGross > 0 ? r.withdrawalNet / r.withdrawalGross : 1)), endWealth };
+}
+
+/**
+ * Net amount per month (first month, growing yearly with inflation if adjusted) that a depot of
+ * `value` can pay for `months` months at the expected return after costs, leaving `endWealth`.
+ */
+export function sustainableMonthly(cfg: SimulationConfig, value: number, months: number, endWealth: number, netShare: number): number {
+  const rm = Math.pow(1 + (cfg.totalReturn - cfg.ter) / 100, 1 / 12) - 1;
+  const gm = cfg.withdrawal.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, 1 / 12) - 1 : 0;
+  const available = value - endWealth / Math.pow(1 + rm, months);
+  if (available <= 0 || months <= 0) return 0;
+  const q = (1 + gm) / (1 + rm);
+  const factor = Math.abs(1 - q) < 1e-9 ? months : (1 - Math.pow(q, months)) / (1 - q);
+  return (available / factor) * netShare;
+}
+
 export function withFixedWithdrawal(cfg: SimulationConfig, monthlyNet: number): SimulationConfig {
   return usesLifeExpectancy(cfg) ? asFixedPlan(cfg, monthlyNet) : { ...cfg, withdrawal: { ...cfg.withdrawal, mode: 'fixed', monthlyNet } };
 }
@@ -193,8 +228,10 @@ interface Lot {
  * Runs the monthly simulation. `shocks` (Monte Carlo) holds one factor per month that is
  * applied to the price development on top of the expected return; without it every month
  * grows at exactly the expected rate.
+ *
+ * `guide` switches guardrails on (Monte Carlo only); see guardrailGuide. Without it they never act.
  */
-export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>): SimulationResult {
+export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guide?: GuardrailGuide): SimulationResult {
   const start = parseDate(cfg.startDate);
   const months = horizonMonths(cfg);
 
@@ -294,6 +331,16 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>): Sim
   let reinvest = true;
   let inPhase = false;
   let phaseGrowth = 1;
+  let yIdx = -1; // index of the calendar year in the simulation
+
+  // Guardrails: the withdrawal is the planned amount times `level`
+  const gr = w.guardrails;
+  const useGuardrails = !!guide && gr.enabled && w.mode !== 'rate';
+  let level = 1;
+  let floorLevel = 0;
+  const grStats = { cuts: 0, raises: 0, minLevel: 1, yearsBelow: 0, longestBelow: 0, missing: 0 };
+  let belowRun = 0;
+  let yearPrice = 1; // fund price at the start of the previous year, to spot a losing year
   let tempTarget = 0; // temporary withdrawals per month
   let tempIds: string[] = [];
 
@@ -401,6 +448,41 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>): Sim
       reinvest = reinvestsIn(cfg, year);
       inPhase = w.enabled && year >= w.startYear;
       phaseGrowth = w.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - w.startYear) : 1;
+      yIdx++;
+      if (useGuardrails && inPhase && year > w.startYear && value > EMPTY) {
+        // A year with a loss (price plus distributions): this year's inflation increase is skipped.
+        const lastReturn = (price / yearPrice) * Math.pow(1 + divRate, 12) - 1;
+        if (w.inflationAdjust && lastReturn < 0) level /= 1 + cfg.inflation / 100;
+        // Can the depot still carry the planned amount until the end? Compare with what it can carry.
+        const full = w.monthlyNet * phaseGrowth;
+        const carry = sustainableMonthly(cfg, value, months - i, guide!.endWealth, guide!.netShare[yIdx] || 1);
+        const ratio = carry > 0 ? (full * level) / carry : Infinity;
+        if (ratio > 1 + gr.threshold / 100) {
+          level *= 1 - gr.adjust / 100;
+          grStats.cuts++;
+        } else if (gr.direction === 'both') {
+          if (ratio < 1 - gr.threshold / 100) {
+            level *= 1 + gr.adjust / 100;
+            grStats.raises++;
+          }
+        } else if (level < 0.9999 && carry > 0 && full / carry <= 1 + gr.threshold / 200) {
+          // Only down: back to the full plan once the depot can carry it again – at most halfway
+          // to the trigger, so it does not jump back and forth.
+          level = 1;
+          grStats.raises++;
+        }
+        floorLevel = w.monthlyNet > 0 ? Math.min(1, gr.floor / w.monthlyNet) : 0;
+        level = Math.max(level, floorLevel);
+        grStats.minLevel = Math.min(grStats.minLevel, level);
+        if (level < 0.9999) {
+          grStats.yearsBelow++;
+          belowRun++;
+          grStats.longestBelow = Math.max(grStats.longestBelow, belowRun);
+        } else {
+          belowRun = 0;
+        }
+      }
+      yearPrice = price;
       tempTarget = 0;
       tempIds = [];
       for (const p of phases) {
@@ -513,7 +595,8 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>): Sim
         if (gross > value) shortfall = true;
         if (gross > 0) s = sell(Math.min(gross, value), false);
       } else {
-        let target = Math.max(0, w.monthlyNet * growth);
+        let target = Math.max(0, w.monthlyNet * growth * level);
+        if (useGuardrails && level < 1) grStats.missing += w.monthlyNet * (1 - level);
         // Paid-out dividends already cover part of the target; only sell the rest.
         if (w.countDividends) target = Math.max(0, target - divPaid);
         if (target > 0) {
@@ -684,6 +767,7 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>): Sim
         depletedYear: (depleted as { year: number; age: number } | null)?.year ?? null,
         depletedAge: (depleted as { year: number; age: number } | null)?.age ?? null,
         shortfall,
+        guardrails: useGuardrails ? grStats : null,
         target: null,
       }
     : null;
