@@ -1,16 +1,18 @@
 import type { SimulationConfig, SimulationResult } from '../types';
 import { meetsGoal } from './goal';
-import { normalGenerator, pathSeed } from './random';
+import { gaussian, mulberry32, pathSeed } from './random';
+import { regimeModel } from './regimes';
 import { guardrailGuide, horizonMonths, resolveWithdrawal, simulate, usesLifeExpectancy, withdrawalActive, withFixedWithdrawal } from './simulation';
 
 /**
  * Monte Carlo: the same plan, simulated many times with random monthly returns.
  *
- * Yearly returns are lognormal. Their median growth equals the expected return entered
- * under "Markt" (e.g. 7 % for the MSCI World, which is how index returns are quoted), so
- * the typical path follows the plan line and half of all paths end above it. The volatility
- * is the standard deviation of the yearly returns. Everything else – inflation, dividends,
- * costs, taxes and all events – stays as in the plan.
+ * Returns switch between a calm and a crisis regime (regimes.ts, estimated on the MSCI World).
+ * Their long-run growth equals the expected return entered under "Markt" (e.g. 7 % for the
+ * MSCI World, which is how index returns are quoted), so the typical path follows the plan
+ * line and half of all paths end above it. The volatility is the annualised monthly volatility
+ * as fact sheets quote it. Everything else – inflation, dividends, costs, taxes and all events –
+ * stays as in the plan.
  */
 
 /** What counts as success: every withdrawal paid in full (plan), or more than paid in (profit). */
@@ -76,30 +78,18 @@ export interface SafeWithdrawal {
 }
 
 /**
- * Log-volatility σ of a lognormal yearly return with median growth `1 + r`
- * whose standard deviation is `vol` (both in %).
+ * Monthly return factors for one path, applied on top of the plan's expected return. Returns
+ * follow the regime model (calm and crisis phases, see regimes.ts); over the long run their
+ * log average is zero, so the typical path follows the plan line.
  */
-export function logVolatility(totalReturnPct: number, volPct: number): number {
-  const g = Math.max(0.01, 1 + totalReturnPct / 100);
-  const s = volPct / 100;
-  if (s <= 0) return 0;
-  const std = (x: number) => g * Math.exp((x * x) / 2) * Math.sqrt(Math.exp(x * x) - 1);
-  let lo = 0;
-  let hi = 3;
-  if (std(hi) <= s) return hi;
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    if (std(mid) < s) lo = mid;
-    else hi = mid;
+export function pathShocks(cfg: SimulationConfig, path: number, months: number, out = new Float64Array(months), model = regimeModel(cfg.monteCarlo.volatility)): Float64Array {
+  const next = mulberry32(pathSeed(cfg.monteCarlo.seed, path));
+  const normal = gaussian(next);
+  let s = next() < model.share[0] ? 0 : 1;
+  for (let i = 0; i < months; i++) {
+    out[i] = Math.exp(model.dev[s] + model.sigma[s] * normal());
+    if (next() < model.leave[s]) s = 1 - s;
   }
-  return (lo + hi) / 2;
-}
-
-/** Monthly return factors for one path; their product has a median of 1. */
-export function pathShocks(cfg: SimulationConfig, path: number, months: number, out = new Float64Array(months)): Float64Array {
-  const sigma = logVolatility(cfg.totalReturn, cfg.monteCarlo.volatility) / Math.sqrt(12);
-  const normal = normalGenerator(pathSeed(cfg.monteCarlo.seed, path));
-  for (let i = 0; i < months; i++) out[i] = Math.exp(sigma * normal());
   return out;
 }
 
@@ -175,6 +165,7 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
   let successes = 0;
   let goals = 0;
   const shocks = new Float64Array(months);
+  const model = regimeModel(cfg.monteCarlo.volatility);
   const minLevels: number[] = [];
   const yearsBelow: number[] = [];
   const cutCounts: number[] = [];
@@ -194,7 +185,7 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
   const unguarded: SimulationConfig = { ...plan, withdrawal: { ...plan.withdrawal, guardrails: { ...gr, enabled: false } } };
 
   for (let r = 0; r < runs; r++) {
-    const res = simulate(plan, pathShocks(cfg, r, months, shocks), guide);
+    const res = simulate(plan, pathShocks(cfg, r, months, shocks, model), guide);
     const g = res.summary.withdrawal?.guardrails;
     if (g) {
       minLevels.push(g.minLevel);

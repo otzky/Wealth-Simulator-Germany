@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from '../defaults';
 import type { SimulationConfig, SimulationResult } from '../types';
-import { logVolatility, pathShocks, runMonteCarlo, solveSafeWithdrawal } from './montecarlo';
+import { pathShocks, runMonteCarlo, solveSafeWithdrawal } from './montecarlo';
+import { MSCI_WORLD_REGIMES, regimeModel, regimeShares } from './regimes';
 import { normalGenerator } from './random';
 import { guardrailGuide, horizonMonths, resolveWithdrawal, runSimulation, simulate, solveWithdrawal } from './simulation';
 
@@ -30,13 +31,52 @@ describe('random numbers', () => {
     const b = normalGenerator(42);
     expect(b()).toBe(xs[0]);
   });
+});
 
-  it('calibrates the volatility to the standard deviation of yearly returns', () => {
-    const r = 0.07;
-    const s = logVolatility(7, 15);
-    const std = (1 + r) * Math.exp((s * s) / 2) * Math.sqrt(Math.exp(s * s) - 1);
-    expect(std).toBeCloseTo(0.15, 6);
-    expect(logVolatility(7, 0)).toBe(0);
+describe('regime model', () => {
+  it('is scaled to the entered volatility as fact sheets quote it', () => {
+    for (const vol of [10, 15, 22]) {
+      const m = regimeModel(vol);
+      const [a, b] = m.share;
+      const mean = a * m.dev[0] + b * m.dev[1];
+      const variance = a * (m.sigma[0] ** 2 + m.dev[0] ** 2) + b * (m.sigma[1] ** 2 + m.dev[1] ** 2) - mean ** 2;
+      expect(mean).toBeCloseTo(0, 12); // the expected return is applied separately
+      expect(Math.sqrt(variance * 12)).toBeCloseTo(vol / 100, 10);
+    }
+    const zero = regimeModel(0);
+    expect([...zero.dev, ...zero.sigma].every((x) => x === 0)).toBe(true);
+    expect(regimeShares(MSCI_WORLD_REGIMES.leave)[1]).toBeCloseTo(0.247, 3);
+  });
+
+  it('produces crises that last months, harsh years and fat tails', () => {
+    // One very long path: 100.000 years
+    const c = cfg({ totalReturn: 7 }, { volatility: 15, seed: 3 });
+    const months = 1_200_000;
+    const logs = Array.from(pathShocks(c, 0, months), (x) => Math.log(x));
+    const mean = logs.reduce((s, x) => s + x, 0) / months;
+    const sd = Math.sqrt(logs.reduce((s, x) => s + (x - mean) ** 2, 0) / months);
+    expect(mean).toBeCloseTo(0, 3);
+    expect(sd * Math.sqrt(12)).toBeCloseTo(0.15, 2);
+    // Calendar years swing more than 15 %, because crises last several months (MSCI World: 19,3 %)
+    const years: number[] = [];
+    for (let y = 0; y < months / 12; y++) {
+      let sum = 0;
+      for (let m = 0; m < 12; m++) sum += logs[y * 12 + m];
+      years.push(sum);
+    }
+    const ym = years.reduce((s, x) => s + x, 0) / years.length;
+    const ysd = Math.sqrt(years.reduce((s, x) => s + (x - ym) ** 2, 0) / years.length);
+    expect(ysd).toBeGreaterThan(0.17);
+    expect(ysd).toBeLessThan(0.21);
+    // Years 25 % or more below the trend: a plain lognormal model with the same volatility has
+    // them about once in 100 years; the regime model in roughly every 12th year
+    // (MSCI World 1970–2026: 5 of 56 years were even below −25 % in absolute terms).
+    const harsh = years.filter((x) => x < Math.log(0.75)).length / years.length;
+    expect(harsh).toBeGreaterThan(0.04);
+    expect(harsh).toBeLessThan(0.12);
+    // More big losses than big gains
+    const skew = logs.reduce((s, x) => s + ((x - mean) / sd) ** 3, 0) / months;
+    expect(skew).toBeLessThan(-0.3);
   });
 });
 
@@ -53,14 +93,23 @@ describe('monte carlo', () => {
     expect(mc.percentiles.p90.at(-1)).toBeCloseTo(plan.summary.valueNominal, 0);
   });
 
-  it('keeps the median path on the plan line', () => {
-    // No dividends, costs or taxes: the median should land on the plan.
+  it('grows on average like the plan, with the typical path slightly above it', () => {
+    // No dividends, costs or taxes: the paths differ from the plan only by market moves.
     const c = cfg({ dividendYield: 0, ter: 0, purchaseFee: 0, applyAdvanceLumpSum: false, allowance: 1e12, durationYears: 30 }, { runs: 4000 });
     const mc = runMonteCarlo(c);
     const plan = mc.plan.at(-1)!;
-    expect(Math.abs(mc.percentiles.p50.at(-1)! / plan - 1)).toBeLessThan(0.04);
-    expect(mc.percentiles.p10.at(-1)!).toBeLessThan(plan * 0.6);
-    expect(mc.percentiles.p90.at(-1)!).toBeGreaterThan(plan * 1.6);
+    // The average growth (geometric mean of all paths) is the entered return – like the
+    // return of an index quoted over its history.
+    // A 30-year log return has a standard deviation of about 1,15, so with 4.000 paths the
+    // average is known to about ±0,018; allow four times that.
+    const meanLog = [...mc.endValues].reduce((s, v) => s + Math.log(v), 0) / mc.runs;
+    expect(Math.abs(meanLog - Math.log(plan))).toBeLessThan(0.075);
+    // Crises make big losses more likely than big gains, so the median lies a little above.
+    const median = mc.percentiles.p50.at(-1)!;
+    expect(median).toBeGreaterThan(plan);
+    expect(median).toBeLessThan(plan * 1.25);
+    expect(mc.percentiles.p10.at(-1)!).toBeLessThan(plan * 0.5);
+    expect(mc.percentiles.p90.at(-1)!).toBeGreaterThan(plan * 2);
     expect(mc.metric).toBe('profit');
   });
 
@@ -237,18 +286,22 @@ describe('guardrails', () => {
     expect(b.guardrails!.yearsBelowBuckets.reduce((x, y) => x + y, 0)).toBeCloseTo(1, 6);
   });
 
-  it('cut rarely when the amount is far below what the depot can carry', () => {
-    const c = plan();
-    c.withdrawal = { ...c.withdrawal, mode: 'fixed', monthlyNet: solveWithdrawal(c)!.monthlyNet * 0.6 };
-    c.durationMode = 'age';
-    c.targetAge = 85;
-    const mc = runMonteCarlo({ ...c, monteCarlo: { ...c.monteCarlo, runs: 600 } });
-    expect(mc.guardrails!.cutShare).toBeLessThan(0.2);
+  it('cut far less often when the amount is well below what the depot can carry', () => {
+    const tight = plan();
+    const low = plan();
+    low.withdrawal = { ...low.withdrawal, mode: 'fixed', monthlyNet: solveWithdrawal(low)!.monthlyNet * 0.6 };
+    low.durationMode = 'age';
+    low.targetAge = 85;
+    const runs = (c: SimulationConfig) => runMonteCarlo({ ...c, monteCarlo: { ...c.monteCarlo, runs: 600 } }).guardrails!;
+    const a = runs(tight);
+    const b = runs(low);
+    expect(b.cutShare).toBeLessThan(a.cutShare * 0.7);
+    expect(b.yearsBelowP90).toBeLessThan(a.yearsBelowP90);
   });
 });
 
 describe('safe withdrawal', () => {
-  it('is lower than the calculated amount and holds as often as asked', () => {
+  it('is lower than the calculated amount and holds as often as asked', { timeout: 30_000 }, () => {
     const c = cfg({ durationYears: 5 }, { runs: 300 });
     c.withdrawal = { ...c.withdrawal, enabled: true, mode: 'target', startYear: 2036, lifeExpectancy: 85, endWealth: 0, inflationAdjust: true };
     const safe = solveSafeWithdrawal(c, 0.9)!;

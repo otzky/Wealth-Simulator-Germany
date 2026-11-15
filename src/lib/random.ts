@@ -12,7 +12,11 @@ export function mulberry32(seed: number): () => number {
 
 /** Standard normal random numbers (Box-Muller), driven by a seeded generator. */
 export function normalGenerator(seed: number): () => number {
-  const next = mulberry32(seed);
+  return gaussian(mulberry32(seed));
+}
+
+/** Standard normal random numbers from a given source of uniform numbers. */
+export function gaussian(next: () => number): () => number {
   let spare: number | null = null;
   return () => {
     if (spare !== null) {

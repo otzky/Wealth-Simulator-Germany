@@ -309,7 +309,7 @@ export default function SettingsPanel({ config, onChange }: Props) {
             <>
               <SliderField
                 label="Volatilität p. a."
-                hint="Wie stark die Jahresrenditen schwanken (Standardabweichung). Breit gestreute Aktien-ETFs wie der MSCI World liegen historisch bei etwa 15 %, Mischfonds deutlich darunter."
+                hint="Die Schwankung, wie Factsheets sie angeben (aus Monatsrenditen aufs Jahr hochgerechnet). Der MSCI World liegt historisch bei etwa 15 %, Mischfonds deutlich darunter. Weil sich Krisen im Modell wie in der Realität über Monate hinziehen, schwanken ganze Kalenderjahre stärker – beim MSCI World um rund 19 %."
                 value={config.monteCarlo.volatility}
                 onChange={(v) => setMc({ volatility: v })}
                 min={0}

@@ -204,10 +204,12 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
       {canSolveSafeWithdrawal(config) && <SafeCard config={config} plan={plan} safe={safe} onChange={onChange} />}
 
       <p className="px-1 text-xs leading-relaxed text-muted">
-        Die Renditen werden zufällig gezogen (lognormal, Monat für Monat unabhängig). Der typische Verlauf wächst mit der unter „Markt“
-        eingetragenen Rendite, die Volatilität bestimmt die Streuung. Inflation, Ausschüttungsquote, Kosten, Steuern und Ereignisse bleiben
-        wie im Plan. Echte Märkte haben häufiger heftige Crashs und Phasen, in denen schlechte Jahre aufeinander folgen – die Ergebnisse
-        hängen stark von Rendite und Volatilität ab und sind eher grobe Orientierung als genaue Wahrscheinlichkeit.
+        Die Renditen folgen einem Regime-Modell, geschätzt auf den MSCI World (Net Return in Euro, 1970–2026): Der Markt wechselt
+        zufällig zwischen ruhigen Phasen (im Mittel rund 17 Monate) und Krisen (rund 5 Monate, etwa ein Viertel der Zeit). So entstehen
+        mehrmonatige Einbrüche, harte Jahre und lange Durststrecken wie in der Realität. Im Durchschnitt wachsen die Verläufe mit der
+        unter „Markt“ eingetragenen Rendite – so, wie Index-Renditen über die Geschichte berechnet werden; der Median liegt etwas darüber.
+        Die Volatilität skaliert die Schwankung. Inflation, Ausschüttungsquote, Kosten, Steuern und Ereignisse bleiben wie im Plan. Die
+        Ergebnisse hängen stark von Rendite und Volatilität ab und sind eine Orientierung, keine genaue Wahrscheinlichkeit.
       </p>
     </div>
   );
@@ -233,7 +235,7 @@ function TargetBreakdown({ r, target, age }: { r: MonteCarloResult; target: { en
     return {
       parts: [
         { key: 'hit', label: 'Restvermögen erreicht', share: share(c.hit), color: 'bg-good' },
-        { key: 'near', label: 'Knapp verfehlt (ab 75 %)', share: share(c.near), color: 'bg-accent' },
+        { key: 'near', label: 'Knapp verfehlt (≥ 75 %)', share: share(c.near), color: 'bg-accent' },
         { key: 'below', label: 'Deutlich darunter', share: share(c.below), color: 'bg-line-strong' },
         { key: 'failed', label: 'Entnahme ausgefallen', share: share(c.failed), color: 'bg-critical' },
       ],
