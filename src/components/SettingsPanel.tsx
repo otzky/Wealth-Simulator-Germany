@@ -1,10 +1,10 @@
 import { useId, useMemo } from 'react';
 import { CalendarClock, Coins, HandCoins, Landmark, Plus, Receipt, Target, Trash2, TrendingUp } from 'lucide-react';
 import type { LumpSum, SavingsStep, SimulationConfig } from '../types';
-import { PARTIAL_EXEMPTION, effectiveTaxRate, parseDate, reinvestsIn, simulationYears } from '../lib/simulation';
+import { PARTIAL_EXEMPTION, effectiveTaxRate, parseDate, reinvestsIn, simulationYears, solveWithdrawal, usesLifeExpectancy } from '../lib/simulation';
 import { formatEuro, formatNumber, formatPercent } from '../lib/format';
 import { newId } from '../lib/storage';
-import { Field, IconButton, NumberField, NumberInput, Section, Segmented, Select, SliderField, Switch, TextInput } from './ui';
+import { cx, Field, IconButton, NumberField, NumberInput, Section, Segmented, Select, SliderField, Switch, TextInput } from './ui';
 
 interface Props {
   config: SimulationConfig;
@@ -12,7 +12,7 @@ interface Props {
 }
 
 export default function SettingsPanel({ config, onChange }: Props) {
-  const years = useMemo(() => simulationYears(config), [config.birthDate, config.startDate, config.durationMode, config.durationYears, config.targetAge]);
+  const years = useMemo(() => simulationYears(config), [config.birthDate, config.startDate, config.durationMode, config.durationYears, config.targetAge, config.withdrawal.enabled, config.withdrawal.mode, config.withdrawal.lifeExpectancy]);
   const yearOptions = years.map((y) => ({ value: y.year, label: `${y.year} · ${y.age} J.` }));
   const firstYear = years[0]?.year ?? new Date().getFullYear();
   const pickYear = (offset: number) => years[Math.min(years.length - 1, offset)]?.year ?? firstYear;
@@ -26,8 +26,12 @@ export default function SettingsPanel({ config, onChange }: Props) {
   const updateLump = (id: string, patch: Partial<LumpSum>) =>
     onChange({ lumpSums: config.lumpSums.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
 
-  const durationSummary =
-    config.durationMode === 'years' ? `${config.durationYears} Jahre` : `bis Alter ${config.targetAge}`;
+  const byLifeExpectancy = usesLifeExpectancy(config);
+  const durationSummary = byLifeExpectancy
+    ? `bis Alter ${config.withdrawal.lifeExpectancy}`
+    : config.durationMode === 'years'
+      ? `${config.durationYears} Jahre`
+      : `bis Alter ${config.targetAge}`;
 
   return (
     <div>
@@ -44,16 +48,22 @@ export default function SettingsPanel({ config, onChange }: Props) {
             <TextInput id={ids.start} type="date" value={config.startDate} onChange={(e) => e.target.value && onChange({ startDate: e.target.value })} />
           </Field>
         </div>
-        <Segmented
-          aria-label="Laufzeit festlegen"
-          value={config.durationMode}
-          onChange={(v) => onChange({ durationMode: v })}
-          options={[
-            { value: 'years', label: 'Anzahl Jahre' },
-            { value: 'age', label: 'Bis Zielalter' },
-          ]}
-        />
-        {config.durationMode === 'years' ? (
+        {!byLifeExpectancy && (
+          <Segmented
+            aria-label="Laufzeit festlegen"
+            value={config.durationMode}
+            onChange={(v) => onChange({ durationMode: v })}
+            options={[
+              { value: 'years', label: 'Anzahl Jahre' },
+              { value: 'age', label: 'Bis Zielalter' },
+            ]}
+          />
+        )}
+        {byLifeExpectancy ? (
+          <p className="rounded-lg bg-surface-2 px-3 py-2 text-xs leading-snug text-ink-2">
+            Die Laufzeit richtet sich nach der Lebenserwartung aus dem Abschnitt „Entnahme“: Die Simulation läuft bis zum Alter {config.withdrawal.lifeExpectancy}.
+          </p>
+        ) : config.durationMode === 'years' ? (
           <SliderField label="Laufzeit" value={config.durationYears} onChange={(v) => onChange({ durationYears: Math.round(v) })} min={1} max={60} step={1} suffix="J." inputMax={100} />
         ) : (
           <SliderField label="Zielalter" value={config.targetAge} onChange={(v) => onChange({ targetAge: Math.round(v) })} min={20} max={100} step={1} suffix="J." />
@@ -373,7 +383,11 @@ function WithdrawalSection({
   const yearsUntil = Math.max(0, w.startYear - parseDate(config.startDate).y);
   const todayValue = w.monthlyNet / Math.pow(1 + config.inflation / 100, yearsUntil);
   const paysOutAtStart = config.dividendYield > 0 ? !reinvestsIn({ ...config, withdrawal: { ...w, enabled: true } }, w.startYear) : false;
-  const countsDividends = w.mode === 'fixed' && w.countDividends && paysOutAtStart;
+  const amountMode = w.mode !== 'rate'; // a net amount per month: entered ('fixed') or calculated ('target')
+  const countsDividends = amountMode && w.countDividends && paysOutAtStart;
+  const isTarget = w.enabled && w.mode === 'target';
+  const target = useMemo(() => (isTarget ? solveWithdrawal(config) : null), [isTarget, config]);
+  const targetToday = target ? target.monthlyNet / Math.pow(1 + config.inflation / 100, yearsUntil) : 0;
 
   const enable = (on: boolean) => {
     if (!on) return setW({ enabled: false });
@@ -393,7 +407,13 @@ function WithdrawalSection({
 
   const summary = !w.enabled
     ? 'Aus'
-    : `ab ${w.startYear} · ${w.mode === 'fixed' ? `${formatEuro(w.monthlyNet)}/Monat` : `${formatPercent(w.rate)} p. a.`}`;
+    : `ab ${w.startYear} · ${
+        w.mode === 'fixed'
+          ? `${formatEuro(w.monthlyNet)}/Monat`
+          : w.mode === 'rate'
+            ? `${formatPercent(w.rate)} p. a.`
+            : `${formatEuro(w.endWealth)} mit ${w.lifeExpectancy} J.`
+      }`;
 
   return (
     <Section icon={<HandCoins size={16} />} title="Entnahme" summary={summary} defaultOpen={w.enabled}>
@@ -405,12 +425,19 @@ function WithdrawalSection({
       />
       {w.enabled && (
         <>
-          <Field label="Beginn" hint="Die Entnahme startet im Januar des gewählten Jahres und läuft bis zum Ende der Simulation.">
+          <Field label="Beginn" hint={
+              isTarget
+                ? 'Die Entnahme startet im Januar des gewählten Jahres und läuft bis zur Lebenserwartung.'
+                : 'Die Entnahme startet im Januar des gewählten Jahres und läuft bis zum Ende der Simulation.'
+            }
+          >
             <Select aria-label="Beginn der Entnahme" value={w.startYear} onChange={(v) => setW({ startYear: v })} options={withValue(yearOptions, w.startYear)} />
           </Field>
           {outside && (
             <p className="rounded-lg bg-critical-soft px-3 py-2 text-xs leading-snug text-critical">
-              Die Simulation endet vor dem Entnahmebeginn ({startAge} J.). Verlängere die Laufzeit im Abschnitt „Zeitraum“.
+              {isTarget
+                ? `Der Entnahmebeginn (${startAge} J.) liegt nach der Lebenserwartung. Wähle einen früheren Beginn oder erhöhe die Lebenserwartung.`
+                : `Die Simulation endet vor dem Entnahmebeginn (${startAge} J.). Verlängere die Laufzeit im Abschnitt „Zeitraum“.`}
             </p>
           )}
           <Segmented
@@ -421,9 +448,55 @@ function WithdrawalSection({
             options={[
               { value: 'fixed', label: 'Fester Betrag' },
               { value: 'rate', label: 'Entnahmerate' },
+              { value: 'target', label: 'Berechnen' },
             ]}
           />
-          {w.mode === 'fixed' ? (
+          {w.mode === 'target' ? (
+            <>
+              <p className="-mt-1 text-xs leading-snug text-muted">
+                Berechnet, wie viel du pro Monat entnehmen kannst, damit bis zu deiner Lebenserwartung genau das gewünschte Restvermögen übrig bleibt.
+              </p>
+              <SliderField
+                label="Lebenserwartung"
+                hint="Bis zu diesem Alter soll das Depot reichen. Die Simulation läuft dann genau bis zu diesem Geburtstag."
+                value={w.lifeExpectancy}
+                onChange={(v) => setW({ lifeExpectancy: Math.round(v) })}
+                min={60}
+                max={110}
+                step={1}
+                suffix="J."
+                inputMin={Math.max(1, parseDate(config.startDate).y - parseDate(config.birthDate).y + 1)}
+                inputMax={120}
+              />
+              <Field
+                label="Restvermögen am Ende"
+                hint="Depotwert, der mit der Lebenserwartung noch vorhanden sein soll, z. B. zum Vererben. 0 € bedeutet: Das Depot wird vollständig aufgebraucht. Gemeint ist der Depotwert vor Steuern – Erben übernehmen die Anteile samt Einstandskursen."
+              >
+                <div className="flex gap-2">
+                  <NumberInput aria-label="Restvermögen am Ende" value={w.endWealth} onChange={(v) => setW({ endWealth: v ?? 0 })} suffix="€" min={0} className="flex-1" />
+                  <BasisSelect value={w.endWealthBasis} onChange={(v) => setW({ endWealthBasis: v })} />
+                </div>
+              </Field>
+              {target && (
+                <div className={cx('rounded-xl px-3.5 py-3', target.reachable ? 'bg-accent-soft' : 'bg-critical-soft')}>
+                  {target.reachable ? (
+                    <>
+                      <p className="text-xs text-ink-2">{countsDividends ? 'Mögliches Netto-Einkommen pro Monat' : 'Mögliche Netto-Entnahme pro Monat'}</p>
+                      <p className="tnum mt-0.5 text-[20px] leading-tight font-semibold text-ink">{formatEuro(target.monthlyNet)}</p>
+                      <p className="mt-1 text-xs leading-snug text-muted">
+                        {w.inflationAdjust && config.inflation > 0 ? `Im ersten Jahr (${w.startYear}), danach jährlich an die Inflation angepasst.` : `Gleichbleibend ab ${w.startYear}.`}
+                        {yearsUntil > 0 && config.inflation > 0 ? ` Entspricht heute etwa ${formatEuro(targetToday)} Kaufkraft.` : ''}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-xs leading-snug text-critical">
+                      Das Restvermögen von {formatEuro(target.endWealth)} wird selbst ohne Entnahme nicht erreicht. Senke das Restvermögen oder erhöhe Sparrate, Rendite oder Lebenserwartung.
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          ) : w.mode === 'fixed' ? (
             <NumberField
               label={countsDividends ? 'Netto-Einkommen pro Monat' : 'Netto-Entnahme pro Monat'}
               hint={
@@ -462,7 +535,7 @@ function WithdrawalSection({
             checked={paysOutAtStart}
             onChange={(v) => onChange({ dividendStrategy: v ? 'withWithdrawal' : 'reinvest' })}
           />}
-          {w.mode === 'fixed' && paysOutAtStart && (
+          {amountMode && paysOutAtStart && (
             <Switch
               label="Dividenden auf den Betrag anrechnen"
               description={

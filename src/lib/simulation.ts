@@ -1,4 +1,4 @@
-import type { FundType, SimulationConfig, SimulationResult, Summary, WithdrawalSummary, YearRow } from '../types';
+import type { FundType, SimulationConfig, SimulationResult, Summary, WithdrawalSummary, WithdrawalTarget, YearRow } from '../types';
 
 /** Teilfreistellung (§ 20 InvStG): tax-free share of fund income. */
 export const PARTIAL_EXEMPTION: Record<FundType, number> = {
@@ -39,15 +39,28 @@ export function ageAtMonthEnd(birthIso: string, year: number, month: number): nu
   return year - b.y - (month < b.m ? 1 : 0);
 }
 
+/** True if the withdrawal amount is calculated from life expectancy and the wealth to keep. */
+export function usesLifeExpectancy(cfg: SimulationConfig): boolean {
+  return cfg.withdrawal.enabled && cfg.withdrawal.mode === 'target';
+}
+
+/** Age at which the simulation ends, or null if it runs for a fixed number of years. */
+export function horizonAge(cfg: SimulationConfig): number | null {
+  // With a life expectancy, the plan always runs exactly until that age.
+  if (usesLifeExpectancy(cfg)) return cfg.withdrawal.lifeExpectancy;
+  return cfg.durationMode === 'years' ? null : cfg.targetAge;
+}
+
 /** Number of months the simulation runs for. */
 export function horizonMonths(cfg: SimulationConfig): number {
-  if (cfg.durationMode === 'years') {
+  const untilAge = horizonAge(cfg);
+  if (untilAge == null) {
     return clamp(Math.round(cfg.durationYears * 12), 1, MAX_MONTHS);
   }
   const s = parseDate(cfg.startDate);
   const b = parseDate(cfg.birthDate);
   // Run up to and including the month of the birthday on which the target age is reached.
-  const months = (b.y + cfg.targetAge - s.y) * 12 + (b.m - s.m) + 1;
+  const months = (b.y + untilAge - s.y) * 12 + (b.m - s.m) + 1;
   return clamp(months, 1, MAX_MONTHS);
 }
 
@@ -113,7 +126,59 @@ export function savingsForYear(cfg: SimulationConfig, year: number, planned = fa
   return Math.max(0, amount * Math.pow(1 + cfg.savingsGrowth / 100, year - since));
 }
 
+/** The 'target' plan as a fixed withdrawal of `monthlyNet`, still ending at the life expectancy. */
+function asFixedPlan(cfg: SimulationConfig, monthlyNet: number): SimulationConfig {
+  return {
+    ...cfg,
+    durationMode: 'age',
+    targetAge: cfg.withdrawal.lifeExpectancy,
+    withdrawal: { ...cfg.withdrawal, mode: 'fixed', monthlyNet },
+  };
+}
+
+/**
+ * 'target' mode: the largest net amount per month that can be paid in full every month
+ * and still leaves the wanted wealth at the end (found by bisection).
+ */
+export function solveWithdrawal(cfg: SimulationConfig): WithdrawalTarget | null {
+  if (!usesLifeExpectancy(cfg) || !withdrawalActive(cfg)) return null;
+  const endWealth = Math.max(0, cfg.withdrawal.endWealth);
+  const basis = cfg.withdrawal.endWealthBasis;
+  const ok = (x: number) => {
+    const s = simulate(asFixedPlan(cfg, x)).summary;
+    return !s.withdrawal?.shortfall && (basis === 'real' ? s.valueReal : s.valueNominal) >= endWealth;
+  };
+  if (!ok(0)) return { monthlyNet: 0, endWealth, basis, reachable: false };
+  let lo = 0;
+  let hi = 1000;
+  while (hi < 1e9 && ok(hi)) {
+    lo = hi;
+    hi *= 2;
+  }
+  if (hi >= 1e9) return { monthlyNet: lo, endWealth, basis, reachable: true };
+  while (hi - lo > 0.005) {
+    const mid = (lo + hi) / 2;
+    if (ok(mid)) lo = mid;
+    else hi = mid;
+  }
+  // Whole euros, rounded down so the wanted wealth is never undercut.
+  return { monthlyNet: Math.floor(lo), endWealth, basis, reachable: true };
+}
+
+/** In 'target' mode: the same plan with the calculated amount as a fixed withdrawal. */
+export function resolveWithdrawal(cfg: SimulationConfig, target = solveWithdrawal(cfg)): SimulationConfig {
+  return usesLifeExpectancy(cfg) ? asFixedPlan(cfg, target?.monthlyNet ?? 0) : cfg;
+}
+
 export function runSimulation(cfg: SimulationConfig): SimulationResult {
+  if (!usesLifeExpectancy(cfg)) return simulate(cfg);
+  const target = solveWithdrawal(cfg);
+  const res = simulate(resolveWithdrawal(cfg, target));
+  if (res.summary.withdrawal) res.summary.withdrawal.target = target;
+  return res;
+}
+
+function simulate(cfg: SimulationConfig): SimulationResult {
   const start = parseDate(cfg.startDate);
   const months = horizonMonths(cfg);
 
@@ -157,6 +222,7 @@ export function runSimulation(cfg: SimulationConfig): SimulationResult {
   let wNetReal = 0;
   let wTaxes = 0;
   let depleted: { year: number; age: number } | null = null;
+  let shortfall = false;
 
   const rows: YearRow[] = [];
   const recentDivNet: number[] = [];
@@ -279,6 +345,7 @@ export function runSimulation(cfg: SimulationConfig): SimulationResult {
       } else {
         gross = wBaseGross * growth;
       }
+      if (gross > value) shortfall = true;
       gross = Math.min(gross, value);
       if (gross > 0) {
         const { tax, used: usedW } = saleTax(gross);
@@ -308,6 +375,8 @@ export function runSimulation(cfg: SimulationConfig): SimulationResult {
         }
       }
     }
+
+    if (inPhase && value <= EMPTY && wMonthGross === 0 && w.mode === 'fixed' && w.monthlyNet > 0) shortfall = true;
 
     // 5. Running costs (TER)
     const after = value * terKeep;
@@ -433,6 +502,8 @@ export function runSimulation(cfg: SimulationConfig): SimulationResult {
         taxes: wTaxes,
         depletedYear: depleted?.year ?? null,
         depletedAge: depleted?.age ?? null,
+        shortfall,
+        target: null,
       }
     : null;
 

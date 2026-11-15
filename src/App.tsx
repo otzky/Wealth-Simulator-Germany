@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { Check, ChevronDown, FileImage, FileSpreadsheet, FileText, Link2, Monitor, Moon, RotateCcw, Share2, SlidersHorizontal, Sun } from 'lucide-react';
 import type { SimulationConfig, ValueBasis } from './types';
 import { defaultConfig } from './defaults';
-import { runSimulation } from './lib/simulation';
+import { resolveWithdrawal, runSimulation } from './lib/simulation';
 import { evaluateGoal } from './lib/goal';
 import { clearShareHash, loadInitialConfig, saveConfig, shareUrl } from './lib/storage';
 import { downloadCsv, exportElement } from './lib/export';
@@ -60,9 +60,12 @@ export default function App() {
   const result = useMemo(() => runSimulation(deferred), [deferred]);
   const band = useMemo(() => {
     if (deferred.returnSpread <= 0) return { low: null, high: null };
+    // A calculated withdrawal stays the same in both scenarios, so the band shows what happens
+    // to the depot if returns turn out worse or better than assumed.
+    const plan = resolveWithdrawal(deferred);
     return {
-      low: runSimulation({ ...deferred, totalReturn: deferred.totalReturn - deferred.returnSpread }),
-      high: runSimulation({ ...deferred, totalReturn: deferred.totalReturn + deferred.returnSpread }),
+      low: runSimulation({ ...plan, totalReturn: plan.totalReturn - plan.returnSpread }),
+      high: runSimulation({ ...plan, totalReturn: plan.totalReturn + plan.returnSpread }),
     };
   }, [deferred]);
   const goal = useMemo(() => evaluateGoal(deferred, result), [deferred, result]);
@@ -115,7 +118,11 @@ export default function App() {
     ...(config.withdrawal.enabled
       ? [
           `Entnahme ab ${config.withdrawal.startYear}: ${
-            config.withdrawal.mode === 'fixed' ? `${formatEuro(config.withdrawal.monthlyNet)}/Monat` : `${formatPercent(config.withdrawal.rate)} p. a.`
+            config.withdrawal.mode === 'fixed'
+              ? `${formatEuro(config.withdrawal.monthlyNet)}/Monat`
+              : config.withdrawal.mode === 'rate'
+                ? `${formatPercent(config.withdrawal.rate)} p. a.`
+                : `${formatEuro(config.withdrawal.endWealth)} Rest mit ${config.withdrawal.lifeExpectancy} J.`
           }`,
         ]
       : []),

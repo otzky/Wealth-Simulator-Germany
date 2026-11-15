@@ -47,6 +47,9 @@ export function defaultConfig(): SimulationConfig {
       inflationAdjust: true,
       stopContributions: true,
       countDividends: true,
+      lifeExpectancy: 90,
+      endWealth: 0,
+      endWealthBasis: 'nominal',
     },
 
     goal: {

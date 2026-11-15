@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from '../defaults';
 import type { SimulationConfig } from '../types';
-import { effectiveTaxRate, horizonMonths, runSimulation, savingsForYear } from './simulation';
+import { effectiveTaxRate, horizonMonths, runSimulation, savingsForYear, solveWithdrawal } from './simulation';
 import { solveGoal } from './goal';
 import { parseNumber } from './format';
 import { sanitize } from './storage';
@@ -231,6 +231,69 @@ describe('goal solver', () => {
   });
 });
 
+describe('withdrawal to a target wealth', () => {
+  // Born 1990-06-15, withdrawals from 2057 (age 67), plan ends with the 90th birthday in June 2080.
+  const plan = (over: Partial<SimulationConfig['withdrawal']> = {}, base: Partial<SimulationConfig> = {}) => {
+    const c = cfg({ initialCapital: 100_000, monthlySavings: 500, dividendYield: 0, durationYears: 5, ...base });
+    c.withdrawal = { ...c.withdrawal, enabled: true, mode: 'target', startYear: 2057, inflationAdjust: false, lifeExpectancy: 90, endWealth: 0, ...over };
+    return c;
+  };
+
+  it('runs until the life expectancy, whatever the duration setting says', () => {
+    const r = runSimulation(plan());
+    expect(r.summary.endAge).toBe(90);
+    expect(r.summary.endYear).toBe(2080);
+  });
+
+  it('without return or tax the depot is simply divided by the months', () => {
+    const c = plan({}, { totalReturn: 0, capitalGainsTax: 0, monthlySavings: 0, initialCapital: 282_000 });
+    const months = 23 * 12 + 6; // Jan 2057 .. Jun 2080
+    expect(solveWithdrawal(c)!.monthlyNet).toBe(Math.floor(282_000 / months));
+  });
+
+  it('uses the depot up when nothing should be left', () => {
+    const r = runSimulation(plan());
+    const ws = r.summary.withdrawal!;
+    expect(ws.target!.reachable).toBe(true);
+    expect(ws.target!.monthlyNet).toBeGreaterThan(0);
+    expect(ws.shortfall).toBe(false);
+    expect(ws.months).toBe(23 * 12 + 6);
+    // Less than one extra euro per month is left over
+    expect(r.summary.valueNominal).toBeLessThan(ws.months * 1.5);
+    // One euro more per month would not last
+    const more = plan();
+    more.withdrawal = { ...more.withdrawal, mode: 'fixed', monthlyNet: ws.target!.monthlyNet + 1 };
+    more.durationMode = 'age';
+    more.targetAge = 90;
+    expect(runSimulation(more).summary.withdrawal!.shortfall).toBe(true);
+  });
+
+  it('leaves the wanted wealth, nominal or in purchasing power', () => {
+    const nominal = runSimulation(plan({ endWealth: 300_000 }, { inflation: 2 }));
+    expect(nominal.summary.valueNominal).toBeGreaterThanOrEqual(300_000);
+    expect(nominal.summary.valueNominal).toBeLessThan(300_000 * 1.01);
+
+    const real = runSimulation(plan({ endWealth: 300_000, endWealthBasis: 'real' }, { inflation: 2 }));
+    expect(real.summary.valueReal).toBeGreaterThanOrEqual(300_000);
+    expect(real.summary.valueReal).toBeLessThan(300_000 * 1.01);
+    expect(real.summary.withdrawal!.target!.monthlyNet).toBeLessThan(nominal.summary.withdrawal!.target!.monthlyNet);
+  });
+
+  it('allows less when more should be left, and with inflation adjustment', () => {
+    const all = solveWithdrawal(plan())!.monthlyNet;
+    const keep = solveWithdrawal(plan({ endWealth: 500_000 }))!.monthlyNet;
+    const adjusted = solveWithdrawal(plan({ inflationAdjust: true }, { inflation: 2 }))!.monthlyNet;
+    expect(keep).toBeLessThan(all);
+    expect(adjusted).toBeLessThan(solveWithdrawal(plan({}, { inflation: 2 }))!.monthlyNet);
+  });
+
+  it('reports when the wanted wealth is out of reach', () => {
+    const r = runSimulation(plan({ endWealth: 1e12 }));
+    expect(r.summary.withdrawal!.target).toMatchObject({ reachable: false, monthlyNet: 0 });
+    expect(r.summary.withdrawal!.net).toBe(0);
+  });
+});
+
 describe('helpers', () => {
   it('parses German numbers', () => {
     expect(parseNumber('1.234,5')).toBe(1234.5);
@@ -246,6 +309,8 @@ describe('helpers', () => {
     expect(c.totalReturn).toBe(5);
     expect(c.churchTax).toBe(0);
     expect(c.goal.wealth).toBeNull();
+    expect(c.withdrawal.lifeExpectancy).toBe(90);
+    expect(sanitize({ withdrawal: { mode: 'target', endWealthBasis: 'x' } }).withdrawal).toMatchObject({ mode: 'target', endWealthBasis: 'nominal' });
   });
 
   it('migrates the old reinvest switch', () => {

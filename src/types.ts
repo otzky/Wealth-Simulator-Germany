@@ -3,7 +3,8 @@ export type ValueBasis = 'nominal' | 'real';
 export type FundType = 'equity' | 'mixed' | 'other';
 export type ChurchTax = 0 | 8 | 9;
 export type GoalVariable = 'savings' | 'initial' | 'return';
-export type WithdrawalMode = 'fixed' | 'rate';
+/** 'target': the monthly amount is calculated so that `endWealth` is left at `lifeExpectancy`. */
+export type WithdrawalMode = 'fixed' | 'rate' | 'target';
 /** What happens with distributions: reinvest, pay out, or switch from reinvesting to paying out. */
 export type DividendStrategy = 'reinvest' | 'payout' | 'withWithdrawal' | 'fromYear';
 
@@ -15,7 +16,10 @@ export interface WithdrawalConfig {
   rate: number; // 'rate': % p.a. of the depot value at the start (before tax)
   inflationAdjust: boolean; // raise the amount every year by the inflation rate
   stopContributions: boolean; // stop the monthly savings once withdrawals start
-  countDividends: boolean; // 'fixed': paid-out dividends count towards the monthly target
+  countDividends: boolean; // 'fixed'/'target': paid-out dividends count towards the monthly target
+  lifeExpectancy: number; // 'target': the plan runs until this age
+  endWealth: number; // 'target': depot value that should be left at that age (e.g. to bequeath)
+  endWealthBasis: ValueBasis; // 'target': endWealth as a nominal amount or in today's purchasing power
 }
 
 /** From the given calendar year onward, the monthly savings rate changes to `monthlyAmount`. */
@@ -161,6 +165,16 @@ export interface WithdrawalSummary {
   taxes: number;
   depletedYear: number | null;
   depletedAge: number | null;
+  shortfall: boolean; // at least one month could not be paid in full ('fixed' amounts)
+  target: WithdrawalTarget | null; // set in 'target' mode
+}
+
+/** Result of the 'target' mode: the withdrawal that leaves the wanted wealth at the end. */
+export interface WithdrawalTarget {
+  monthlyNet: number; // calculated net amount per month in the first withdrawal year
+  endWealth: number;
+  basis: ValueBasis;
+  reachable: boolean; // false: even without withdrawals the wanted wealth is not reached
 }
 
 export interface SimulationResult {

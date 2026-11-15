@@ -358,7 +358,9 @@ function GoalCard({ goal, config }: { goal: GoalResult; config: SimulationConfig
 function WithdrawalCard({ config, result, real }: { config: SimulationConfig; result: SimulationResult; real: boolean }) {
   const s = result.summary;
   const ws = s.withdrawal!;
-  const depleted = ws.depletedYear != null;
+  // In 'target' mode the depot is meant to run down to the wanted rest, so an empty depot at the very end is fine.
+  const depleted = ws.depletedYear != null && !ws.target?.reachable;
+  const bad = ws.target ? !ws.target.reachable : depleted;
   const lastsYears = depleted ? ws.depletedYear! - ws.startYear + 1 : null;
   const startValue = real ? ws.startValueReal : ws.startValue;
   const endValue = real ? s.valueReal : s.valueNominal;
@@ -381,7 +383,11 @@ function WithdrawalCard({ config, result, real }: { config: SimulationConfig; re
             <p className="text-[15px] font-semibold text-ink">Entnahmephase</p>
             <p className="tnum text-[13px] text-muted">
               ab {ws.startYear} mit {ws.startAge} Jahren ·{' '}
-              {config.withdrawal.mode === 'fixed' ? `${formatEuro(config.withdrawal.monthlyNet)} netto/Monat` : `${formatPercent(config.withdrawal.rate)} p. a.`}
+              {ws.target
+                ? `${formatEuro(ws.target.monthlyNet)} netto/Monat (berechnet)`
+                : config.withdrawal.mode === 'rate'
+                  ? `${formatPercent(config.withdrawal.rate)} p. a.`
+                  : `${formatEuro(config.withdrawal.monthlyNet)} netto/Monat`}
               {config.withdrawal.inflationAdjust ? ', inflationsangepasst' : ''}
             </p>
           </div>
@@ -389,13 +395,19 @@ function WithdrawalCard({ config, result, real }: { config: SimulationConfig; re
         <span
           className={cx(
             'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium',
-            depleted ? 'bg-critical-soft text-critical' : 'bg-good-soft text-good',
+            bad ? 'bg-critical-soft text-critical' : 'bg-good-soft text-good',
           )}
         >
-          {depleted ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
-          {depleted
-            ? `Depot aufgebraucht ${ws.depletedYear} (Alter ${ws.depletedAge})`
-            : `Reicht bis ${s.endYear} (Alter ${s.endAge})`}
+          {bad ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+          {ws.target
+            ? ws.target.reachable
+              ? ws.target.endWealth > 0
+                ? `${formatEuroCompact(ws.target.endWealth)}${ws.target.basis === 'real' ? ' Kaufkraft' : ''} übrig mit ${s.endAge} Jahren`
+                : `Reicht genau bis ${s.endYear} (Alter ${s.endAge})`
+              : `Restvermögen ${formatEuroCompact(ws.target.endWealth)} nicht erreichbar`
+            : depleted
+              ? `Depot aufgebraucht ${ws.depletedYear} (Alter ${ws.depletedAge})`
+              : `Reicht bis ${s.endYear} (Alter ${s.endAge})`}
         </span>
       </div>
       <dl className="grid grid-cols-2 gap-3 px-5 py-5 sm:px-6 xl:grid-cols-4">

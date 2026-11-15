@@ -52,7 +52,8 @@ export function sanitize(input: unknown): SimulationConfig {
   if (![0, 8, 9].includes(cfg.churchTax)) cfg.churchTax = 0;
   if (!['equity', 'mixed', 'other'].includes(cfg.fundType)) cfg.fundType = 'equity';
   if (!['years', 'age'].includes(cfg.durationMode)) cfg.durationMode = 'years';
-  if (!['fixed', 'rate'].includes(cfg.withdrawal.mode)) cfg.withdrawal.mode = 'fixed';
+  if (!['fixed', 'rate', 'target'].includes(cfg.withdrawal.mode)) cfg.withdrawal.mode = 'fixed';
+  if (!['nominal', 'real'].includes(cfg.withdrawal.endWealthBasis)) cfg.withdrawal.endWealthBasis = 'nominal';
   // Older saves used a yes/no switch for reinvesting
   if (src.dividendStrategy === undefined && src.reinvestDividends === false) cfg.dividendStrategy = 'payout';
   if (!['reinvest', 'payout', 'withWithdrawal', 'fromYear'].includes(cfg.dividendStrategy)) cfg.dividendStrategy = 'reinvest';
