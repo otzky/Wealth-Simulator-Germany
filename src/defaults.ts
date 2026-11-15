@@ -54,6 +54,13 @@ export function defaultConfig(): SimulationConfig {
       endWealthBasis: 'nominal',
     },
 
+    monteCarlo: {
+      enabled: false,
+      volatility: 15,
+      runs: 1000,
+      seed: 1,
+    },
+
     goal: {
       enabled: false,
       wealth: 1_000_000,

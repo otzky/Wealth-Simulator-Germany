@@ -436,6 +436,7 @@ export function Button({
   className?: string;
   'aria-haspopup'?: boolean;
   'aria-expanded'?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -448,6 +449,7 @@ export function Button({
         variant === 'primary' && 'bg-accent text-accent-ink hover:bg-accent-hover',
         variant === 'secondary' && 'border border-line bg-surface text-ink hover:border-line-strong hover:bg-surface-2',
         variant === 'ghost' && 'text-ink-2 hover:bg-surface-2 hover:text-ink',
+        'disabled:pointer-events-none disabled:opacity-60',
         className,
       )}
     >

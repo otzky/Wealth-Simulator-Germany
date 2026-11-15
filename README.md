@@ -13,6 +13,7 @@ Interaktiver Rechner für den langfristigen Vermögensaufbau mit ETFs – inklus
 - **Ausschüttungen**: reinvestieren, auszahlen oder ab einem Jahr bzw. ab Entnahmebeginn auf Auszahlung umstellen
 - **Entnahmephase**: fester Netto-Betrag oder Entnahmerate (z. B. 4 %-Regel), optional inflationsangepasst; ausgezahlte Dividenden können auf den Betrag angerechnet werden; Steuern auf Verkäufe, Reichweite des Depots, frei gewordene Sparrate
 - **Entnahme berechnen**: aus Lebenserwartung und gewünschtem Restvermögen (z. B. zum Vererben) die mögliche monatliche Entnahme ermitteln
+- **Monte Carlo (optional)**: spielt den Plan mit allen Ereignissen tausendfach mit zufälligen Renditen durch – eigener Tab mit Erfolgswahrscheinlichkeit, Chart aller Verläufe, Bandbreite, Verteilung des Endvermögens, Quote je Entnahme und sicherer Entnahme für eine gewünschte Sicherheit
 - **Zielrechner**: benötigte Sparrate, Startkapital oder Rendite für ein Zielvermögen und/oder eine Netto-Dividende pro Monat
 - **Auswertung**: nominal oder in heutiger Kaufkraft, Charts, Bilanz mit fiktivem Verkauf, Jahrestabelle
 - **Teilen & Export**: Link mit allen Einstellungen, PDF, PNG und CSV
@@ -31,7 +32,15 @@ Die Simulation läuft monatlich mit konstanten Annahmen. Ein paar Regeln, die ma
 - **Entnahmephase** (Abschnitt „Entnahme“): die dauerhafte Entnahme ab einem Jahr bis zum Ende der Simulation – als fester Netto-Betrag, als Entnahmerate oder berechnet aus Lebenserwartung und gewünschtem Restvermögen. Die Kennzahlen der Karte „Entnahmephase“ beziehen sich nur auf diese Phase; „Ausgezahlt“ und die Bilanz enthalten alle Entnahmen.
 - **Steuer bei Verkäufen (FIFO)**: Das Depot wird in Monats-Tranchen geführt. Bei jedem Verkauf gelten die ältesten Anteile als zuerst verkauft, wie bei deutschen Depotbanken. Versteuert wird der Gewinn genau dieser Anteile, nach Teilfreistellung und restlichem Sparerpauschbetrag. Weil alte Anteile meist den höchsten Gewinn tragen, fällt zu Beginn einer Entnahme mehr Steuer an als später. Verluste einzelner Tranchen werden innerhalb eines Verkaufs verrechnet; ein Verlustvortrag wird nicht geführt.
 - **Vorabpauschale**: erhöht die Anschaffungskosten aller Anteile, damit sie beim Verkauf nicht doppelt besteuert wird. Die Steuer darauf wird anteilig aus dem Depot entnommen.
-- **Nicht abgebildet**: schwankende Renditen, andere Einkünfte (Rente, bAV), Günstigerprüfung, Änderungen der Steuergesetze.
+- **Monte Carlo** (Schalter unter „Markt“, Ergebnisse im Tab „Monte Carlo“; der Plan bleibt unverändert)
+  - *Renditen*: Monat für Monat unabhängig und lognormal verteilt. Der Median wächst mit der eingetragenen Gesamtrendite – so wie Index-Renditen angegeben werden (z. B. MSCI World etwa 7 % p. a.). Der typische Verlauf liegt damit auf der Plan-Linie, die Hälfte der Verläufe endet darüber. Der Durchschnitt aller Verläufe liegt höher (bei 7 % und 15 % Volatilität bei etwa 8 % p. a.).
+  - *Volatilität*: Standardabweichung der Jahresrenditen; Standard 15 % für einen breit gestreuten Aktien-ETF. Inflation, Ausschüttungsquote, Kosten, Steuern und Ereignisse bleiben wie im Plan.
+  - *Verläufe*: 1.000 (Erfolgsquote etwa ± 1,5 Prozentpunkte genau) oder 5.000 (etwa ± 0,7). Die Zufallszahlen hängen an einem gespeicherten Startwert: Gleiche Einstellungen ergeben gleiche Ergebnisse, „Neu würfeln“ zieht neue. Gerechnet wird in einem Web Worker, die Seite bleibt bedienbar.
+  - *Erfolg*: Mit Entnahmen (Entnahmephase oder Ereignisse) zählt ein Verlauf als Erfolg, wenn jede Entnahme voll ausgezahlt wird und – bei „Berechnen“ – das gewünschte Restvermögen übrig bleibt. Ohne Entnahmen zählt, ob das Depot nach Verkauf und Steuern mehr wert ist als die Einzahlungen. Ist ein Ziel gesetzt, wird zusätzlich gezeigt, wie oft es erreicht wird. Weil schon ein um wenige Euro verfehltes Restvermögen als nicht aufgegangen zählt, schlüsselt der Tab bei „Berechnen“ zusätzlich auf: Restvermögen erreicht, knapp verfehlt (ab 75 % des Ziels), deutlich darunter, Entnahme ausgefallen – und nennt den Betrag, der in 90 % der Verläufe mindestens übrig bleibt.
+  - *„Berechnen“*: Die Entnahme wird einmal ohne Schwankungen berechnet und dann in allen Verläufen festgehalten. Sie geht deshalb nur in etwa der Hälfte der Verläufe auf.
+  - *Sichere Entnahme*: der höchste Netto-Betrag pro Monat für die Entnahmephase, bei dem der Plan in mindestens 80, 90 oder 95 % der Verläufe aufgeht (Bisektion auf 1 € genau, höchstens 1.000 Verläufe, auf Knopfdruck). Kann als fester Betrag übernommen werden.
+  - *Grenzen*: Echte Märkte haben häufiger heftige Crashs und Phasen mit mehreren schlechten Jahren in Folge; die Ergebnisse hängen stark von Rendite und Volatilität ab.
+- **Nicht abgebildet**: schwankende Inflation, Crashs als einzelnes Ereignis, andere Einkünfte (Rente, bAV), Günstigerprüfung, Änderungen der Steuergesetze.
 
 ## Entwicklung
 
@@ -50,9 +59,12 @@ npm run build      # Produktions-Build nach dist/
 src/
   lib/simulation.ts   Rechenkern (monatliche Simulation, Ereignisse, Steuern, FIFO)
   lib/goal.ts         Zielrechner (Bisektion)
+  lib/montecarlo.ts   Monte Carlo: Verläufe, Auswertung, sichere Entnahme
+  lib/mc.worker.ts    Web Worker für Monte Carlo
+  lib/random.ts       Zufallszahlen mit Startwert
   lib/storage.ts      Speichern, Teilen-Links
   lib/export.ts       PDF/PNG/CSV
-  components/         Oberfläche (Einstellungen, Ergebnisse, Charts)
+  components/         Oberfläche (Einstellungen, Ergebnisse, Charts, Monte-Carlo-Tab)
 ```
 
 ## Hinweis

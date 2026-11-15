@@ -15,7 +15,7 @@ export function sanitize(input: unknown): SimulationConfig {
     const def = base[key];
     const val = src[key];
     if (val === undefined) continue;
-    if (key === 'goal' || key === 'withdrawal') {
+    if (key === 'goal' || key === 'withdrawal' || key === 'monteCarlo') {
       const g = (val && typeof val === 'object' ? val : {}) as Record<string, unknown>;
       const nestedBase = base[key] as unknown as Record<string, unknown>;
       const nested: Record<string, unknown> = { ...nestedBase };
@@ -59,6 +59,9 @@ export function sanitize(input: unknown): SimulationConfig {
   if (!['years', 'age'].includes(cfg.durationMode)) cfg.durationMode = 'years';
   if (!['fixed', 'rate', 'target'].includes(cfg.withdrawal.mode)) cfg.withdrawal.mode = 'fixed';
   if (!['nominal', 'real'].includes(cfg.withdrawal.endWealthBasis)) cfg.withdrawal.endWealthBasis = 'nominal';
+  if (![1000, 5000].includes(cfg.monteCarlo.runs)) cfg.monteCarlo.runs = 1000;
+  cfg.monteCarlo.volatility = Math.min(100, Math.max(0, cfg.monteCarlo.volatility));
+  cfg.monteCarlo.seed = Math.abs(Math.round(cfg.monteCarlo.seed)) >>> 0;
   // Older saves used a yes/no switch for reinvesting
   if (src.dividendStrategy === undefined && src.reinvestDividends === false) cfg.dividendStrategy = 'payout';
   if (!['reinvest', 'payout', 'withWithdrawal', 'fromYear'].includes(cfg.dividendStrategy)) cfg.dividendStrategy = 'reinvest';

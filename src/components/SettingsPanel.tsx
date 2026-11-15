@@ -20,6 +20,7 @@ export default function SettingsPanel({ config, onChange }: Props) {
 
   const ids = { birth: useId(), start: useId() };
   const taxRate = effectiveTaxRate(config);
+  const setMc = (patch: Partial<SimulationConfig['monteCarlo']>) => onChange({ monteCarlo: { ...config.monteCarlo, ...patch } });
   const setGoal = (patch: Partial<SimulationConfig['goal']>) => onChange({ goal: { ...config.goal, ...patch } });
 
   const updateStep = (id: string, patch: Partial<SavingsStep>) =>
@@ -220,11 +221,11 @@ export default function SettingsPanel({ config, onChange }: Props) {
       <Section
         icon={<TrendingUp size={16} />}
         title="Markt"
-        summary={`${formatPercent(config.totalReturn)} Rendite · ${formatPercent(config.inflation)} Inflation`}
+        summary={`${formatPercent(config.totalReturn)} Rendite · ${formatPercent(config.inflation)} Inflation${config.monteCarlo.enabled ? ' · Monte Carlo' : ''}`}
       >
         <SliderField
           label="Gesamtrendite p. a."
-          hint="Erwartete jährliche Rendite inklusive Ausschüttungen, vor Kosten und Steuern. Der MSCI World lag historisch bei etwa 7–8 % (nominal)."
+          hint="Durchschnittliche jährliche Rendite, wie sie für Indizes angegeben wird – der MSCI World lag historisch bei etwa 7–8 % (nominal). Inklusive Ausschüttungen, vor Kosten und Steuern."
           value={config.totalReturn}
           onChange={(v) => onChange({ totalReturn: v })}
           min={0}
@@ -297,6 +298,41 @@ export default function SettingsPanel({ config, onChange }: Props) {
           suffix="± %"
           inputMax={10}
         />
+        <div className="space-y-3 rounded-xl border border-line p-3">
+          <Switch
+            label="Schwankungen simulieren (Monte Carlo)"
+            description="Spielt den Plan tausendfach mit zufälligen Renditen durch und zeigt im Tab „Monte Carlo“, wie oft er aufgeht. Der Plan selbst bleibt unverändert."
+            checked={config.monteCarlo.enabled}
+            onChange={(v) => setMc({ enabled: v })}
+          />
+          {config.monteCarlo.enabled && (
+            <>
+              <SliderField
+                label="Volatilität p. a."
+                hint="Wie stark die Jahresrenditen schwanken (Standardabweichung). Breit gestreute Aktien-ETFs wie der MSCI World liegen historisch bei etwa 15 %, Mischfonds deutlich darunter."
+                value={config.monteCarlo.volatility}
+                onChange={(v) => setMc({ volatility: v })}
+                min={0}
+                max={30}
+                step={0.5}
+                suffix="%"
+                inputMax={100}
+              />
+              <Field label="Anzahl Verläufe" hint="Mehr Verläufe machen die Wahrscheinlichkeiten genauer (bei 1.000 etwa ± 1,5 Prozentpunkte, bei 5.000 etwa ± 0,7), rechnen aber länger.">
+                <Segmented
+                  aria-label="Anzahl Verläufe"
+                  size="sm"
+                  value={String(config.monteCarlo.runs) as '1000' | '5000'}
+                  onChange={(v) => setMc({ runs: Number(v) })}
+                  options={[
+                    { value: '1000', label: '1.000' },
+                    { value: '5000', label: '5.000 (genauer)' },
+                  ]}
+                />
+              </Field>
+            </>
+          )}
+        </div>
       </Section>
 
       <Section

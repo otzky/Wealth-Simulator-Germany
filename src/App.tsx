@@ -9,7 +9,9 @@ import { downloadCsv, exportElement } from './lib/export';
 import { formatEuro, formatPercent } from './lib/format';
 import SettingsPanel from './components/SettingsPanel';
 import Results from './components/Results';
-import { Button, Card, IconButton, cx } from './components/ui';
+import MonteCarloView from './components/MonteCarlo';
+import { useMonteCarlo, useSafeWithdrawal } from './lib/useMonteCarlo';
+import { Button, Card, IconButton, Segmented, cx } from './components/ui';
 
 type Theme = 'system' | 'light' | 'dark';
 
@@ -69,6 +71,9 @@ export default function App() {
     };
   }, [deferred]);
   const goal = useMemo(() => evaluateGoal(deferred, result), [deferred, result]);
+  const [view, setView] = useState<'plan' | 'mc'>('plan');
+  const mc = useMonteCarlo(config);
+  const safe = useSafeWithdrawal();
 
   const share = async () => {
     const url = shareUrl(config);
@@ -117,6 +122,7 @@ export default function App() {
         ]
       : []),
     ...(eventCount ? [`${eventCount} ${eventCount === 1 ? 'Ereignis' : 'Ereignisse'}`] : []),
+    ...(config.monteCarlo.enabled ? [`Monte Carlo: ${formatPercent(config.monteCarlo.volatility)} Volatilität`] : []),
     ...(config.withdrawal.enabled
       ? [
           `Entnahme ab ${config.withdrawal.startYear}: ${
@@ -189,6 +195,28 @@ export default function App() {
           </aside>
 
           <section ref={reportRef} className="min-w-0 space-y-4" aria-live="polite">
+            <Segmented
+              aria-label="Ansicht"
+              value={view}
+              onChange={setView}
+              className="w-full sm:w-fit"
+              options={[
+                { value: 'plan', label: 'Plan' },
+                {
+                  value: 'mc',
+                  label: (
+                    <span className="inline-flex items-center gap-1.5">
+                      Monte Carlo
+                      {mc.enabled && mc.result && (
+                        <span className="tnum rounded bg-surface-3 px-1.5 py-0.5 text-[11px] font-medium text-ink-2">
+                          {Math.round(mc.result.successRate * 100)} %
+                        </span>
+                      )}
+                    </span>
+                  ),
+                },
+              ]}
+            />
             <div className="flex flex-wrap gap-1.5">
               {assumptions.map((a) => (
                 <span key={a} className="tnum rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-ink-2">
@@ -196,16 +224,20 @@ export default function App() {
                 </span>
               ))}
             </div>
-            <Results
-              config={deferred}
-              result={result}
-              low={band.low}
-              high={band.high}
-              goal={goal}
-              basis={basis}
-              onBasisChange={setBasis}
-              stale={stale}
-            />
+            {view === 'plan' ? (
+              <Results
+                config={deferred}
+                result={result}
+                low={band.low}
+                high={band.high}
+                goal={goal}
+                basis={basis}
+                onBasisChange={setBasis}
+                stale={stale}
+              />
+            ) : (
+              <MonteCarloView config={config} plan={result} mc={mc} safe={safe} basis={basis} onBasisChange={setBasis} onChange={patch} />
+            )}
           </section>
         </div>
       </main>

@@ -54,6 +54,13 @@ export interface WithdrawalPhase {
   inflationAdjust: boolean; // raise the amount every year by the inflation rate
 }
 
+export interface MonteCarloConfig {
+  enabled: boolean;
+  volatility: number; // % p. a., standard deviation of the yearly returns
+  runs: number; // number of simulated paths
+  seed: number; // start value of the random numbers, so results stay the same until something changes
+}
+
 export interface SimulationConfig {
   // Profile & horizon
   birthDate: string; // yyyy-mm-dd
@@ -96,6 +103,9 @@ export interface SimulationConfig {
 
   // Withdrawal phase (Entnahme)
   withdrawal: WithdrawalConfig;
+
+  // Monte Carlo: random monthly returns around the expected return
+  monteCarlo: MonteCarloConfig;
 
   // Goal
   goal: {
@@ -173,6 +183,7 @@ export interface Summary {
   oneOffNetReal: number;
   /** First year in which an event withdrawal could not be paid in full, with the missing net amount. */
   eventShortfall: { year: number; missing: number } | null;
+  missedEvents: string[]; // ids of one-off and temporary withdrawals that were not paid in full at least once
   withdrawal: WithdrawalSummary | null; // the withdrawal phase (section "Entnahme") only
 }
 

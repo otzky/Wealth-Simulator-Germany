@@ -165,6 +165,11 @@ export function solveWithdrawal(cfg: SimulationConfig): WithdrawalTarget | null 
   return { monthlyNet: Math.floor(lo), endWealth, basis, reachable: true };
 }
 
+/** The plan with a fixed net withdrawal of `monthlyNet` (in 'target' mode still ending at the life expectancy). */
+export function withFixedWithdrawal(cfg: SimulationConfig, monthlyNet: number): SimulationConfig {
+  return usesLifeExpectancy(cfg) ? asFixedPlan(cfg, monthlyNet) : { ...cfg, withdrawal: { ...cfg.withdrawal, mode: 'fixed', monthlyNet } };
+}
+
 /** In 'target' mode: the same plan with the calculated amount as a fixed withdrawal. */
 export function resolveWithdrawal(cfg: SimulationConfig, target = solveWithdrawal(cfg)): SimulationConfig {
   return usesLifeExpectancy(cfg) ? asFixedPlan(cfg, target?.monthlyNet ?? 0) : cfg;
@@ -184,7 +189,12 @@ interface Lot {
   cost: number; // acquisition cost incl. fees, plus Vorabpauschalen already taxed
 }
 
-function simulate(cfg: SimulationConfig): SimulationResult {
+/**
+ * Runs the monthly simulation. `shocks` (Monte Carlo) holds one factor per month that is
+ * applied to the price development on top of the expected return; without it every month
+ * grows at exactly the expected rate.
+ */
+export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>): SimulationResult {
   const start = parseDate(cfg.startDate);
   const months = horizonMonths(cfg);
 
@@ -285,6 +295,7 @@ function simulate(cfg: SimulationConfig): SimulationResult {
   let inPhase = false;
   let phaseGrowth = 1;
   let tempTarget = 0; // temporary withdrawals per month
+  let tempIds: string[] = [];
 
   /** Buys shares for `net` euros; `cost` is what counts as acquisition cost. */
   const buy = (net: number, cost: number, monthIndex: number) => {
@@ -367,8 +378,11 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     return { gross: proceeds, net: proceeds - tax, tax };
   };
 
-  const noteEventShortfall = (year: number, missing: number) => {
-    if (missing > 0.005 && !eventShortfall) eventShortfall = { year, missing };
+  const missed = new Set<string>(); // event withdrawals that could not be paid in full at least once
+  const noteEventShortfall = (year: number, missing: number, ids: string[]) => {
+    if (missing <= 0.005) return;
+    if (!eventShortfall) eventShortfall = { year, missing };
+    for (const id of ids) missed.add(id);
   };
 
   for (let i = 0; i < months; i++) {
@@ -388,8 +402,10 @@ function simulate(cfg: SimulationConfig): SimulationResult {
       inPhase = w.enabled && year >= w.startYear;
       phaseGrowth = w.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - w.startYear) : 1;
       tempTarget = 0;
+      tempIds = [];
       for (const p of phases) {
         if (year < p.startYear || year > p.endYear) continue;
+        tempIds.push(p.id);
         tempTarget += p.monthlyNet * (p.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - p.startYear) : 1);
       }
     }
@@ -416,7 +432,7 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     y.freed += freed;
 
     // 2. Price development
-    price *= 1 + priceRate;
+    price *= shocks ? (1 + priceRate) * shocks[i] : 1 + priceRate;
     value = units * price;
 
     // 3. Distributions, taxed immediately (after Teilfreistellung and allowance)
@@ -462,7 +478,7 @@ function simulate(cfg: SimulationConfig): SimulationResult {
           y.oneOffNet += s.net;
           oneOffNet += s.net;
         }
-        noteEventShortfall(year, want - oneOffMonthNet);
+        noteEventShortfall(year, want - oneOffMonthNet, cfg.oneOffWithdrawals.filter((o) => o.year === year && o.amount > 0).map((o) => o.id));
       }
     }
 
@@ -476,7 +492,7 @@ function simulate(cfg: SimulationConfig): SimulationResult {
         wMonthGross += s.gross;
         wMonthNet += s.net;
       }
-      noteEventShortfall(year, tempTarget - wMonthNet);
+      noteEventShortfall(year, tempTarget - wMonthNet, tempIds);
     }
 
     // 4c. Withdrawal phase
@@ -702,6 +718,7 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     oneOffNet,
     oneOffNetReal,
     eventShortfall,
+    missedEvents: [...missed],
     withdrawal,
   };
 
