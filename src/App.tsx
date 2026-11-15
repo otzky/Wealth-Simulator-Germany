@@ -98,6 +98,7 @@ export default function App() {
     setToast('Auf Standardwerte zurückgesetzt.');
   };
 
+  const eventCount = config.savingsSteps.length + config.lumpSums.length + config.oneOffWithdrawals.length + config.withdrawalPhases.length;
   const assumptions = [
     `${formatEuro(config.initialCapital)} Start`,
     `${formatEuro(config.monthlySavings)}/Monat${config.savingsGrowth ? ` +${formatPercent(config.savingsGrowth)} p. a.` : ''}`,
@@ -115,6 +116,7 @@ export default function App() {
                 : 'Dividenden reinvestiert',
         ]
       : []),
+    ...(eventCount ? [`${eventCount} ${eventCount === 1 ? 'Ereignis' : 'Ereignisse'}`] : []),
     ...(config.withdrawal.enabled
       ? [
           `Entnahme ab ${config.withdrawal.startYear}: ${

@@ -146,7 +146,7 @@ export function solveWithdrawal(cfg: SimulationConfig): WithdrawalTarget | null 
   const basis = cfg.withdrawal.endWealthBasis;
   const ok = (x: number) => {
     const s = simulate(asFixedPlan(cfg, x)).summary;
-    return !s.withdrawal?.shortfall && (basis === 'real' ? s.valueReal : s.valueNominal) >= endWealth;
+    return !s.withdrawal?.shortfall && !s.eventShortfall && (basis === 'real' ? s.valueReal : s.valueNominal) >= endWealth;
   };
   if (!ok(0)) return { monthlyNet: 0, endWealth, basis, reachable: false };
   let lo = 0;
@@ -156,7 +156,7 @@ export function solveWithdrawal(cfg: SimulationConfig): WithdrawalTarget | null 
     hi *= 2;
   }
   if (hi >= 1e9) return { monthlyNet: lo, endWealth, basis, reachable: true };
-  while (hi - lo > 0.005) {
+  while (hi - lo > 0.2) {
     const mid = (lo + hi) / 2;
     if (ok(mid)) lo = mid;
     else hi = mid;
@@ -178,6 +178,12 @@ export function runSimulation(cfg: SimulationConfig): SimulationResult {
   return res;
 }
 
+/** Shares bought in one month. Sales take the oldest lots first (FIFO), as German brokers do. */
+interface Lot {
+  units: number;
+  cost: number; // acquisition cost incl. fees, plus Vorabpauschalen already taxed
+}
+
 function simulate(cfg: SimulationConfig): SimulationResult {
   const start = parseDate(cfg.startDate);
   const months = horizonMonths(cfg);
@@ -190,9 +196,17 @@ function simulate(cfg: SimulationConfig): SimulationResult {
   const terKeep = Math.pow(1 - cfg.ter / 100, 1 / 12);
   const inflRate = monthlyRate(cfg.inflation);
   const w = cfg.withdrawal;
+  const phases = cfg.withdrawalPhases.filter((p) => p.monthlyNet > 0 && p.endYear >= p.startYear);
 
+  // The depot: shares in monthly lots at a common price. value = units × price.
+  let price = 1;
+  let units = 0;
   let value = 0;
-  let costBasis = 0; // for taxing sales: deposits + reinvested net dividends + Vorabpauschalen
+  let costBasis = 0; // sum of all lot costs
+  let lots: Lot[] = [];
+  let head = 0; // index of the oldest lot that still holds shares
+  let lotMonth = -1; // month index in which the newest lot was opened
+
   let invested = 0;
   let investedReal = 0;
   let deflator = 1;
@@ -202,6 +216,15 @@ function simulate(cfg: SimulationConfig): SimulationResult {
   let totalTaxes = 0;
   let totalCosts = 0;
   let totalWithdrawnNet = 0;
+
+  // All sales that were paid out: the withdrawal phase, temporary withdrawals and one-off withdrawals
+  let soldGross = 0;
+  let soldNet = 0;
+  let soldNetReal = 0;
+  let soldTaxes = 0;
+  let oneOffNet = 0;
+  let oneOffNetReal = 0;
+  let eventShortfall: { year: number; missing: number } | null = null;
 
   // Withdrawal phase
   let wBaseGross = 0; // 'rate' mode: gross monthly amount fixed at the start
@@ -246,18 +269,106 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     wGross: 0,
     wNet: 0,
     wNetReal: 0,
+    oneOffGross: 0,
+    oneOffNet: 0,
+    oneOffNetReal: 0,
     taxes: 0,
     costs: 0,
     months: 0,
   });
   let y = newYear(0);
 
-  /** Tax on selling `gross` worth of shares, using the remaining allowance. */
-  const saleTax = (gross: number) => {
-    const gainShare = value > 0 ? Math.max(0, 1 - costBasis / value) : 0;
-    const taxable = gross * gainShare * (1 - exemption);
+  // Values that are constant within a calendar year
+  let savings = 0; // monthly deposit
+  let freed = 0; // savings no longer invested because the plan stopped for the withdrawal phase
+  let reinvest = true;
+  let inPhase = false;
+  let phaseGrowth = 1;
+  let tempTarget = 0; // temporary withdrawals per month
+
+  /** Buys shares for `net` euros; `cost` is what counts as acquisition cost. */
+  const buy = (net: number, cost: number, monthIndex: number) => {
+    const u = net / price;
+    if (lotMonth === monthIndex && lots.length > head) {
+      const lot = lots[lots.length - 1];
+      lot.units += u;
+      lot.cost += cost;
+    } else {
+      lots.push({ units: u, cost });
+      lotMonth = monthIndex;
+    }
+    units += u;
+    costBasis += cost;
+    value = units * price;
+  };
+
+  const emptyDepot = () => {
+    lots = [];
+    head = 0;
+    lotMonth = -1;
+    units = 0;
+    costBasis = 0;
+    value = 0;
+  };
+
+  /**
+   * Sells the oldest shares first and taxes the gain of exactly those shares
+   * (after Teilfreistellung and the remaining allowance). `amount` is either the
+   * wanted payout after tax (`asNet`) or the sale proceeds before tax.
+   * If the depot is too small, everything is sold.
+   */
+  const sell = (amount: number, asNet: boolean) => {
+    const A = allowanceLeft;
+    const k = (1 - exemption) * taxRate; // tax per euro of gain once the allowance is used up
+    const netOf = (p: number, g: number) => p - Math.max(0, g * (1 - exemption) - A) * taxRate;
+    let proceeds = 0;
+    let gain = 0;
+    let idx = head;
+    while (idx < lots.length) {
+      const lot = lots[idx];
+      const a = lot.units * price; // proceeds if the whole lot is sold
+      const g = a - lot.cost;
+      let f = 1; // share of this lot that is sold
+      let last = false;
+      if (asNet) {
+        if (netOf(proceeds + a, gain + g) >= amount) {
+          // Payout is the lower of two straight lines in f (untaxed / taxed), so solve both and take the larger f.
+          const f1 = a > 0 ? (amount - proceeds) / a : 0;
+          const den = a - k * g;
+          const f2 = den > 0 ? (amount - proceeds + taxRate * (gain * (1 - exemption) - A)) / den : 0;
+          f = clamp(Math.max(f1, f2), 0, 1);
+          last = true;
+        }
+      } else if (proceeds + a >= amount) {
+        f = a > 0 ? clamp((amount - proceeds) / a, 0, 1) : 0;
+        last = true;
+      }
+      proceeds += f * a;
+      gain += f * g;
+      units -= f * lot.units;
+      costBasis -= f * lot.cost;
+      if (f >= 1) {
+        idx++;
+      } else {
+        lot.units *= 1 - f;
+        lot.cost *= 1 - f;
+      }
+      if (last) break;
+    }
+    head = idx;
+    value = units * price;
+    if (head >= lots.length || value <= EMPTY) emptyDepot();
+
+    // Losses of single lots are netted within the sale; an overall loss is not carried forward.
+    const taxable = Math.max(0, gain * (1 - exemption));
     const used = Math.min(allowanceLeft, taxable);
-    return { tax: (taxable - used) * taxRate, used };
+    allowanceLeft -= used;
+    const tax = (taxable - used) * taxRate;
+    return { gross: proceeds, net: proceeds - tax, tax };
+  };
+
+  const noteEventShortfall = (year: number, missing: number) => {
+    if (missing > 0.005 && !eventShortfall) eventShortfall = { year, missing };
   };
 
   for (let i = 0; i < months; i++) {
@@ -265,38 +376,48 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     const year = start.y + Math.floor(monthIdx / 12);
     const month = (monthIdx % 12) + 1;
     const isLast = i === months - 1;
+    const yearStart = i === 0 || month === 1;
 
-    if (i === 0 || month === 1) {
+    if (yearStart) {
       allowanceLeft = cfg.allowance;
       y = newYear(value);
+      // Everything that only depends on the calendar year is worked out once per year.
+      savings = savingsForYear(cfg, year);
+      freed = savingsForYear(cfg, year, true) - savings;
+      reinvest = reinvestsIn(cfg, year);
+      inPhase = w.enabled && year >= w.startYear;
+      phaseGrowth = w.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - w.startYear) : 1;
+      tempTarget = 0;
+      for (const p of phases) {
+        if (year < p.startYear || year > p.endYear) continue;
+        tempTarget += p.monthlyNet * (p.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - p.startYear) : 1);
+      }
     }
     y.months++;
 
     // 1. Deposits (start of month)
-    let deposit = savingsForYear(cfg, year);
+    let deposit = savings;
     if (i === 0) deposit += cfg.initialCapital;
-    if (i === 0 || month === 1) {
+    if (yearStart) {
       for (const ls of cfg.lumpSums) if (ls.year === year) deposit += ls.amount;
     }
     if (deposit > 0) {
       const feeAmount = deposit * fee;
       const net = deposit - feeAmount;
-      value += net;
+      buy(net, deposit, i); // purchase fees are part of the acquisition cost
       invested += deposit;
       investedReal += deposit / deflator;
-      costBasis += deposit; // purchase fees are part of the acquisition cost
       y.contributions += deposit;
       y.netPurchases += net;
       y.weightedPurchases += net * ((13 - month) / 12);
       y.costs += feeAmount;
     }
 
-    // Savings that are no longer invested because the plan stopped for the withdrawal phase
-    const freed = savingsForYear(cfg, year, true) - savingsForYear(cfg, year);
     y.freed += freed;
 
     // 2. Price development
-    value *= 1 + priceRate;
+    price *= 1 + priceRate;
+    value = units * price;
 
     // 3. Distributions, taxed immediately (after Teilfreistellung and allowance)
     const divGross = value * divRate;
@@ -306,24 +427,61 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     taxable -= used;
     const divTax = taxable * taxRate;
     const divNet = divGross - divTax;
-    const reinvest = reinvestsIn(cfg, year);
     y.reinvest = reinvest;
     y.divGross += divGross;
     y.divNet += divNet;
     y.taxes += divTax;
     const divPaid = reinvest ? 0 : divNet;
     if (reinvest) {
-      value += divNet;
-      costBasis += divNet;
+      if (divNet > 0) buy(divNet, divNet, i);
       y.netPurchases += divNet;
     } else {
       y.divPaid += divNet;
     }
 
-    // 4. Withdrawal: sell shares and pay tax on the gain portion
-    const inPhase = w.enabled && year >= w.startYear;
-    let wMonthGross = 0;
+    // 4. Sales. Shares are sold oldest first and the gain of those shares is taxed.
+    const record = (s: { gross: number; net: number; tax: number }) => {
+      y.sales += s.gross;
+      y.taxes += s.tax;
+      soldGross += s.gross;
+      soldNet += s.net;
+      soldTaxes += s.tax;
+    };
+
+    // 4a. One-off withdrawals (events), in January of their year
+    let oneOffMonthNet = 0;
+    if (yearStart) {
+      let want = 0;
+      for (const o of cfg.oneOffWithdrawals) if (o.year === year && o.amount > 0) want += o.amount;
+      if (want > 0) {
+        if (value > EMPTY) {
+          const s = sell(want, true);
+          record(s);
+          oneOffMonthNet = s.net;
+          y.oneOffGross += s.gross;
+          y.oneOffNet += s.net;
+          oneOffNet += s.net;
+        }
+        noteEventShortfall(year, want - oneOffMonthNet);
+      }
+    }
+
+    // 4b. Temporary monthly withdrawals (events)
+    let wMonthGross = 0; // all regular withdrawals of this month
     let wMonthNet = 0;
+    if (tempTarget > 0) {
+      if (value > EMPTY) {
+        const s = sell(tempTarget, true);
+        record(s);
+        wMonthGross += s.gross;
+        wMonthNet += s.net;
+      }
+      noteEventShortfall(year, tempTarget - wMonthNet);
+    }
+
+    // 4c. Withdrawal phase
+    let mainGross = 0;
+    let mainNet = 0;
     if (inPhase && !wStarted) {
       wStarted = true;
       wStartValue = value;
@@ -332,68 +490,67 @@ function simulate(cfg: SimulationConfig): SimulationResult {
       wBaseGross = (value * w.rate) / 100 / 12;
     }
     if (inPhase && value > EMPTY) {
-      const growth = w.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - w.startYear) : 1;
-      let gross: number;
-      if (w.mode === 'fixed') {
+      const growth = phaseGrowth;
+      let s: { gross: number; net: number; tax: number } | null = null;
+      if (w.mode === 'rate') {
+        const gross = wBaseGross * growth;
+        if (gross > value) shortfall = true;
+        if (gross > 0) s = sell(Math.min(gross, value), false);
+      } else {
         let target = Math.max(0, w.monthlyNet * growth);
         // Paid-out dividends already cover part of the target; only sell the rest.
         if (w.countDividends) target = Math.max(0, target - divPaid);
-        // Gross-up so that the payout after tax equals the target.
-        const gainShare = Math.max(0, 1 - costBasis / value);
-        const k = gainShare * (1 - exemption);
-        gross = target * k <= allowanceLeft ? target : (target - allowanceLeft * taxRate) / (1 - k * taxRate);
-      } else {
-        gross = wBaseGross * growth;
+        if (target > 0) {
+          // Sells as much as it takes for the payout after tax to equal the target.
+          s = sell(target, true);
+          if (s.net < target - 0.005) shortfall = true;
+        }
       }
-      if (gross > value) shortfall = true;
-      gross = Math.min(gross, value);
-      if (gross > 0) {
-        const { tax, used: usedW } = saleTax(gross);
-        allowanceLeft -= usedW;
-        const net = gross - tax;
-        costBasis -= costBasis * (gross / value);
-        value -= gross;
-        wMonthGross = gross;
-        wMonthNet = net;
-        y.sales += gross;
-        y.wGross += gross;
-        y.wNet += net;
-        y.taxes += tax;
-        wTaxes += tax;
-        wGross += gross;
-        wNet += net;
+      if (s && s.gross > 0) {
+        record(s);
+        mainGross = s.gross;
+        mainNet = s.net;
+        wMonthGross += s.gross;
+        wMonthNet += s.net;
+        wTaxes += s.tax;
+        wGross += s.gross;
+        wNet += s.net;
         wMonths++;
-        wLastNet = net;
+        wLastNet = s.net;
         if (wMonths === 1) {
-          wFirstNet = net;
-          wFirstGross = gross;
-        }
-        if (value <= EMPTY && !depleted) {
-          depleted = { year, age: ageAtMonthEnd(cfg.birthDate, year, month) };
-          costBasis = 0;
-          value = 0;
+          wFirstNet = s.net;
+          wFirstGross = s.gross;
         }
       }
+    } else if (inPhase && w.mode !== 'rate' && w.monthlyNet > 0) {
+      shortfall = true; // nothing left to sell
     }
-
-    if (inPhase && value <= EMPTY && wMonthGross === 0 && w.mode === 'fixed' && w.monthlyNet > 0) shortfall = true;
+    if (inPhase && value <= EMPTY && !depleted) {
+      depleted = { year, age: ageAtMonthEnd(cfg.birthDate, year, month) };
+    }
+    y.wGross += wMonthGross;
+    y.wNet += wMonthNet;
 
     // 5. Running costs (TER)
-    const after = value * terKeep;
-    y.costs += value - after;
-    value = after;
+    const beforeTer = value;
+    price *= terKeep;
+    value = units * price;
+    y.costs += beforeTer - value;
 
     deflator *= 1 + inflRate;
     y.divNetReal += divNet / deflator;
     y.divPaidReal += divPaid / deflator;
     y.wNetReal += wMonthNet / deflator;
+    y.oneOffNetReal += oneOffMonthNet / deflator;
     y.freedReal += freed / deflator;
-    wNetReal += wMonthNet / deflator;
+    wNetReal += mainNet / deflator;
+    soldNetReal += (wMonthNet + oneOffMonthNet) / deflator;
+    oneOffNetReal += oneOffMonthNet / deflator;
     if (inPhase) {
       phaseMonths++;
       if (phaseMonths <= 12) {
-        fy.gross += wMonthGross;
-        fy.net += wMonthNet;
+        fy.gross += mainGross;
+        fy.net += mainNet;
         fy.div += divPaid;
         fy.freed += freed;
         fy.months++;
@@ -420,14 +577,19 @@ function simulate(cfg: SimulationConfig): SimulationResult {
         allowanceLeft -= usedA;
         advTaxable -= usedA;
         const advTax = Math.min(value, advTaxable * taxRate);
-        // Taxed amounts raise the cost basis so they are not taxed twice on sale.
-        costBasis += advance;
-        if (advTax > 0) {
-          // The tax is paid out of the depot (proportional sale).
-          costBasis -= costBasis * (advTax / value);
-          value -= advTax;
-          y.taxes += advTax;
+        // Taxed amounts raise the cost of every share so they are not taxed twice on sale.
+        // The tax itself is paid out of the depot (a small share of every lot, untaxed).
+        const perUnit = advance / units;
+        const keep = 1 - advTax / value;
+        for (let j = head; j < lots.length; j++) {
+          const lot = lots[j];
+          lot.cost = (lot.cost + perUnit * lot.units) * keep;
+          lot.units *= keep;
         }
+        costBasis = (costBasis + advance) * keep;
+        units *= keep;
+        value = units * price;
+        y.taxes += advTax;
       }
     }
 
@@ -436,7 +598,7 @@ function simulate(cfg: SimulationConfig): SimulationResult {
       totalDivNetReal += y.divNetReal;
       totalTaxes += y.taxes;
       totalCosts += y.costs;
-      totalWithdrawnNet += y.wNet;
+      totalWithdrawnNet += y.wNet + y.oneOffNet;
       totalDivPaid += y.divPaid;
       totalDivPaidReal += y.divPaidReal;
       rows.push({
@@ -466,6 +628,9 @@ function simulate(cfg: SimulationConfig): SimulationResult {
         realWithdrawalNet: y.wNetReal,
         monthlyWithdrawalNet: y.wNet / y.months,
         realMonthlyWithdrawalNet: y.wNetReal / y.months,
+        oneOffGross: y.oneOffGross,
+        oneOffNet: y.oneOffNet,
+        realOneOffNet: y.oneOffNetReal,
         withdrawnTotalNet: totalWithdrawnNet,
         costs: y.costs,
         deflator,
@@ -500,8 +665,8 @@ function simulate(cfg: SimulationConfig): SimulationResult {
         net: wNet,
         netReal: wNetReal,
         taxes: wTaxes,
-        depletedYear: depleted?.year ?? null,
-        depletedAge: depleted?.age ?? null,
+        depletedYear: (depleted as { year: number; age: number } | null)?.year ?? null,
+        depletedAge: (depleted as { year: number; age: number } | null)?.age ?? null,
         shortfall,
         target: null,
       }
@@ -517,7 +682,7 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     valueNominal: value,
     valueReal: value / deflator,
     // Everything the depot produced: what is left + what was sold + dividends that were paid out
-    growth: value + wGross + totalDivPaid - invested,
+    growth: value + soldGross + totalDivPaid - invested,
     dividendsNet: totalDivNet,
     dividendsNetReal: totalDivNetReal,
     dividendsPaidOut: totalDivPaid,
@@ -530,6 +695,13 @@ function simulate(cfg: SimulationConfig): SimulationResult {
     finalMonthlyDividendNet: avg(recentDivNet),
     finalMonthlyDividendNetReal: avg(recentDivNetReal),
     deflator,
+    withdrawnGross: soldGross,
+    withdrawnNet: soldNet,
+    withdrawnNetReal: soldNetReal,
+    withdrawalTaxes: soldTaxes,
+    oneOffNet,
+    oneOffNetReal,
+    eventShortfall,
     withdrawal,
   };
 

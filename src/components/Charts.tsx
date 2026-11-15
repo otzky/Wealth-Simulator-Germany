@@ -69,14 +69,21 @@ export function LegendItem({
   );
 }
 
+/** A one-off deposit or withdrawal, marked in the wealth chart. */
+export interface ChartEvent {
+  year: number;
+  label: string;
+}
+
 interface WealthChartProps {
   data: WealthPoint[];
   target?: number | null;
   spread: number;
   withdrawalStart?: number | null;
+  events?: ChartEvent[];
 }
 
-export function WealthChart({ data, target, spread, withdrawalStart }: WealthChartProps) {
+export function WealthChart({ data, target, spread, withdrawalStart, events = [] }: WealthChartProps) {
   const showBand = spread > 0 && data.some((d) => d.band);
   return (
     <div className="h-[340px] w-full">
@@ -160,6 +167,15 @@ export function WealthChart({ data, target, spread, withdrawalStart }: WealthCha
               label={{ value: 'Ziel', position: 'insideTopLeft', fill: 'var(--ink-2)', fontSize: 12 }}
             />
           ) : null}
+          {events.map((e, i) => (
+            <ReferenceLine
+              key={`${e.year}-${i}`}
+              x={e.year}
+              stroke="var(--line-strong)"
+              strokeDasharray="2 3"
+              label={{ value: e.label, position: 'insideTopLeft', fill: 'var(--ink-2)', fontSize: 11, dy: 16 * (i % 3) }}
+            />
+          ))}
           {withdrawalStart ? <WithdrawalMarker year={withdrawalStart} /> : null}
         </ComposedChart>
       </ResponsiveContainer>

@@ -231,6 +231,91 @@ describe('goal solver', () => {
   });
 });
 
+describe('events', () => {
+  const flat = { totalReturn: 0, dividendYield: 0, monthlySavings: 0 };
+
+  it('pays a one-off withdrawal in January and reduces the depot', () => {
+    const r = runSimulation(cfg({ ...flat, initialCapital: 100_000, durationYears: 3, oneOffWithdrawals: [{ id: 'a', year: 2027, amount: 30_000 }] }));
+    expect(r.rows.map((x) => x.oneOffNet)).toEqual([0, 30_000, 0]);
+    expect(r.rows[1].withdrawalNet).toBe(0); // not part of the monthly income
+    expect(r.summary.valueNominal).toBeCloseTo(70_000, 6);
+    expect(r.summary.oneOffNet).toBe(30_000);
+    expect(r.summary.withdrawnNet).toBe(30_000);
+    expect(r.summary.eventShortfall).toBeNull();
+    expect(r.summary.withdrawal).toBeNull();
+  });
+
+  it('sells more than the net amount when the gain is taxed', () => {
+    const r = runSimulation(cfg({ totalReturn: 8, dividendYield: 0, monthlySavings: 0, initialCapital: 100_000, durationYears: 3, allowance: 0, oneOffWithdrawals: [{ id: 'a', year: 2028, amount: 20_000 }] }));
+    expect(r.rows[2].oneOffNet).toBeCloseTo(20_000, 6);
+    expect(r.rows[2].oneOffGross).toBeGreaterThan(20_000);
+    expect(r.rows[2].taxes).toBeCloseTo(r.rows[2].oneOffGross - 20_000, 6);
+  });
+
+  it('reports when the depot is too small for a one-off withdrawal', () => {
+    const r = runSimulation(cfg({ ...flat, initialCapital: 10_000, durationYears: 3, oneOffWithdrawals: [{ id: 'a', year: 2027, amount: 25_000 }] }));
+    expect(r.summary.oneOffNet).toBeCloseTo(10_000, 6);
+    expect(r.summary.eventShortfall).toEqual({ year: 2027, missing: 15_000 });
+    expect(r.summary.valueNominal).toBe(0);
+  });
+
+  it('pays a temporary withdrawal only between its first and last year', () => {
+    const r = runSimulation(
+      cfg({ ...flat, inflation: 2, initialCapital: 100_000, durationYears: 5, withdrawalPhases: [{ id: 'p', startYear: 2027, endYear: 2028, monthlyNet: 500, inflationAdjust: true }] }),
+    );
+    expect(r.rows.map((x) => Math.round(x.withdrawalNet))).toEqual([0, 6000, 6120, 0, 0]);
+    expect(r.summary.withdrawnNet).toBeCloseTo(12_120, 6);
+    expect(r.summary.withdrawal).toBeNull(); // no withdrawal phase configured
+  });
+
+  it('adds temporary withdrawals to the withdrawal phase and keeps the phase figures separate', () => {
+    const c = cfg({ ...flat, initialCapital: 100_000, durationYears: 4, withdrawalPhases: [{ id: 'p', startYear: 2026, endYear: 2028, monthlyNet: 200, inflationAdjust: false }] });
+    c.withdrawal = { ...c.withdrawal, enabled: true, startYear: 2028, monthlyNet: 1000, inflationAdjust: false };
+    const r = runSimulation(c);
+    expect(r.rows.map((x) => x.withdrawalNet)).toEqual([2400, 2400, 14_400, 12_000]);
+    expect(r.summary.withdrawal!.net).toBeCloseTo(24_000, 6);
+    expect(r.summary.withdrawnNet).toBeCloseTo(31_200, 6);
+  });
+});
+
+describe('FIFO', () => {
+  // Flat tax of 25 % on the full gain keeps the numbers readable.
+  const plain = { capitalGainsTax: 25, soli: 0, fundType: 'other' as const, allowance: 0, dividendYield: 0, monthlySavings: 0 };
+
+  it('taxes the gain of the oldest shares, not the average gain', () => {
+    // 10.000 € bought at price 1; one year later (price 2) another 20.000 € is added and 5.000 € net taken out.
+    const r = runSimulation(
+      cfg({ ...plain, totalReturn: 100, initialCapital: 10_000, durationYears: 2, lumpSums: [{ id: 'l', year: 2027, amount: 20_000 }], oneOffWithdrawals: [{ id: 'o', year: 2027, amount: 5000 }] }),
+    );
+    const price = 2 ** (13 / 12); // at the sale, after January's price move
+    const gainShareOldest = 1 - 1 / price; // the first shares cost 1 each
+    expect(r.rows[1].oneOffGross).toBeCloseTo(5000 / (1 - 0.25 * gainShareOldest), 4);
+    // With the average cost of all shares the tax would have been clearly lower
+    const gainShareAverage = 1 - 30_000 / (10_000 * price + 20_000 * 2 ** (1 / 12));
+    expect(r.rows[1].taxes).toBeGreaterThan(1.5 * (5000 / (1 - 0.25 * gainShareAverage) - 5000));
+  });
+
+  it('pays the same tax in total when everything is sold', () => {
+    // Selling in two steps or at once must tax the same total gain.
+    const base = { ...plain, totalReturn: 6, initialCapital: 50_000, monthlySavings: 500, durationYears: 10 };
+    const hold = runSimulation(cfg(base));
+    const total = hold.summary.taxesPaid + hold.summary.saleTax;
+    expect(total).toBeCloseTo((hold.summary.valueNominal - hold.summary.invested) * 0.25, 4);
+    const gross = runSimulation(cfg({ ...base, oneOffWithdrawals: [{ id: 'o', year: 2031, amount: 20_000 }] }));
+    const gainTaxed = (gross.summary.taxesPaid + gross.summary.saleTax) / 0.25;
+    expect(gainTaxed).toBeCloseTo(gross.summary.valueNominal + gross.summary.withdrawnGross - gross.summary.invested, 4);
+  });
+
+  it('nets a losing lot against the gains within one sale', () => {
+    // Fees make the newest shares worth less than they cost; selling everything taxes only the net gain.
+    const r = runSimulation(
+      cfg({ ...plain, totalReturn: 10, purchaseFee: 5, initialCapital: 10_000, durationYears: 2, lumpSums: [{ id: 'l', year: 2027, amount: 10_000 }], oneOffWithdrawals: [{ id: 'o', year: 2027, amount: 1e9 }] }),
+    );
+    expect(r.rows[1].taxes).toBeCloseTo((r.rows[1].oneOffGross - 20_000) * 0.25, 6);
+    expect(r.summary.valueNominal).toBe(0);
+  });
+});
+
 describe('withdrawal to a target wealth', () => {
   // Born 1990-06-15, withdrawals from 2057 (age 67), plan ends with the 90th birthday in June 2080.
   const plan = (over: Partial<SimulationConfig['withdrawal']> = {}, base: Partial<SimulationConfig> = {}) => {
@@ -258,8 +343,8 @@ describe('withdrawal to a target wealth', () => {
     expect(ws.target!.monthlyNet).toBeGreaterThan(0);
     expect(ws.shortfall).toBe(false);
     expect(ws.months).toBe(23 * 12 + 6);
-    // Less than one extra euro per month is left over
-    expect(r.summary.valueNominal).toBeLessThan(ws.months * 1.5);
+    // Only the rounding to whole euros (plus its growth) is left over
+    expect(r.summary.valueNominal).toBeLessThan(ws.months * 3);
     // One euro more per month would not last
     const more = plan();
     more.withdrawal = { ...more.withdrawal, mode: 'fixed', monthlyNet: ws.target!.monthlyNet + 1 };
@@ -310,6 +395,10 @@ describe('helpers', () => {
     expect(c.churchTax).toBe(0);
     expect(c.goal.wealth).toBeNull();
     expect(c.withdrawal.lifeExpectancy).toBe(90);
+    expect(c.oneOffWithdrawals).toEqual([]);
+    const ev = sanitize({ oneOffWithdrawals: [{ year: 2030, amount: 5 }, { year: 'x' }], withdrawalPhases: [{ startYear: 2030, endYear: 2031, monthlyNet: 100 }, { startYear: 2030 }] });
+    expect(ev.oneOffWithdrawals).toHaveLength(1);
+    expect(ev.withdrawalPhases).toMatchObject([{ startYear: 2030, endYear: 2031, monthlyNet: 100, inflationAdjust: true }]);
     expect(sanitize({ withdrawal: { mode: 'target', endWealthBasis: 'x' } }).withdrawal).toMatchObject({ mode: 'target', endWealthBasis: 'nominal' });
   });
 

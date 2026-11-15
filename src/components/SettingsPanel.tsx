@@ -1,6 +1,6 @@
 import { useId, useMemo } from 'react';
-import { CalendarClock, Coins, HandCoins, Landmark, Plus, Receipt, Target, Trash2, TrendingUp } from 'lucide-react';
-import type { LumpSum, SavingsStep, SimulationConfig } from '../types';
+import { CalendarClock, Coins, HandCoins, Landmark, Milestone, Plus, Receipt, Target, Trash2, TrendingUp } from 'lucide-react';
+import type { LumpSum, OneOffWithdrawal, SavingsStep, SimulationConfig, WithdrawalPhase } from '../types';
 import { PARTIAL_EXEMPTION, effectiveTaxRate, parseDate, reinvestsIn, simulationYears, solveWithdrawal, usesLifeExpectancy } from '../lib/simulation';
 import { formatEuro, formatNumber, formatPercent } from '../lib/format';
 import { newId } from '../lib/storage';
@@ -14,6 +14,7 @@ interface Props {
 export default function SettingsPanel({ config, onChange }: Props) {
   const years = useMemo(() => simulationYears(config), [config.birthDate, config.startDate, config.durationMode, config.durationYears, config.targetAge, config.withdrawal.enabled, config.withdrawal.mode, config.withdrawal.lifeExpectancy]);
   const yearOptions = years.map((y) => ({ value: y.year, label: `${y.year} · ${y.age} J.` }));
+  const shortYearOptions = years.map((y) => ({ value: y.year, label: `${y.year} · ${y.age}` })); // for narrow selects
   const firstYear = years[0]?.year ?? new Date().getFullYear();
   const pickYear = (offset: number) => years[Math.min(years.length - 1, offset)]?.year ?? firstYear;
 
@@ -27,6 +28,12 @@ export default function SettingsPanel({ config, onChange }: Props) {
     onChange({ lumpSums: config.lumpSums.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
 
   const byLifeExpectancy = usesLifeExpectancy(config);
+  const updateOneOff = (id: string, patch: Partial<OneOffWithdrawal>) =>
+    onChange({ oneOffWithdrawals: config.oneOffWithdrawals.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
+  const updatePhase = (id: string, patch: Partial<WithdrawalPhase>) =>
+    onChange({ withdrawalPhases: config.withdrawalPhases.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
+  const eventCount = config.savingsSteps.length + config.lumpSums.length + config.oneOffWithdrawals.length + config.withdrawalPhases.length;
+
   const durationSummary = byLifeExpectancy
     ? `bis Alter ${config.withdrawal.lifeExpectancy}`
     : config.durationMode === 'years'
@@ -98,6 +105,16 @@ export default function SettingsPanel({ config, onChange }: Props) {
           inputMax={50}
         />
 
+      </Section>
+
+      <Section
+        icon={<Milestone size={16} />}
+        title="Ereignisse"
+        summary={eventCount ? `${eventCount} geplant` : 'Keine geplant'}
+      >
+        <p className="text-xs leading-snug text-muted">
+          Alles, was vom gleichmäßigen Sparplan abweicht: mehr oder weniger sparen, Geld einzahlen oder herausnehmen. Einmalige Beträge gelten jeweils im Januar des Jahres.
+        </p>
         <ListBlock
           title="Sparrate ändern"
           hint="Ab dem gewählten Jahr gilt die neue monatliche Rate (die jährliche Erhöhung startet von dort neu)."
@@ -130,6 +147,70 @@ export default function SettingsPanel({ config, onChange }: Props) {
               <Select aria-label="Jahr" size="sm" value={s.year} onChange={(v) => updateLump(s.id, { year: v })} options={withValue(yearOptions, s.year)} className="flex-1" />
               <NumberInput aria-label="Betrag" size="sm" value={s.amount} onChange={(v) => updateLump(s.id, { amount: v ?? 0 })} suffix="€" min={0} className="w-28" />
             </ListRow>
+          ))}
+        </ListBlock>
+
+        <ListBlock
+          title="Einmalige Entnahmen"
+          hint="Zum Beispiel Eigenkapital für eine Immobilie. Der Betrag ist netto: So viel kommt im Januar des Jahres auf deinem Konto an. Verkauft wird entsprechend mehr, weil Kursgewinne versteuert werden."
+          empty="Keine einmaligen Entnahmen."
+          onAdd={() => onChange({ oneOffWithdrawals: [...config.oneOffWithdrawals, { id: newId(), year: pickYear(5), amount: 50_000 }] })}
+        >
+          {config.oneOffWithdrawals.map((s) => (
+            <ListRow key={s.id} onRemove={() => onChange({ oneOffWithdrawals: config.oneOffWithdrawals.filter((x) => x.id !== s.id) })}>
+              <Select aria-label="Jahr" size="sm" value={s.year} onChange={(v) => updateOneOff(s.id, { year: v })} options={withValue(yearOptions, s.year)} className="flex-1" />
+              <NumberInput aria-label="Netto-Betrag" size="sm" value={s.amount} onChange={(v) => updateOneOff(s.id, { amount: v ?? 0 })} suffix="€" min={0} className="w-28" />
+            </ListRow>
+          ))}
+        </ListBlock>
+
+        <ListBlock
+          title="Befristete Entnahmen"
+          hint="Ein monatlicher Netto-Betrag für einen begrenzten Zeitraum, z. B. um Teilzeit oder ein Sabbatical auszugleichen. Gilt von Januar des ersten bis Dezember des letzten Jahres. Die Sparrate läuft dabei weiter – solange du noch sparst, ist es günstiger, zuerst die Sparrate zu senken, weil dann keine Steuer anfällt. Die dauerhafte Entnahme im Ruhestand stellst du unter „Entnahme“ ein."
+          empty="Keine befristeten Entnahmen."
+          onAdd={() =>
+            onChange({
+              withdrawalPhases: [
+                ...config.withdrawalPhases,
+                { id: newId(), startYear: pickYear(10), endYear: pickYear(14), monthlyNet: 500, inflationAdjust: true },
+              ],
+            })
+          }
+        >
+          {config.withdrawalPhases.map((p) => (
+            <div key={p.id} className="flex items-start gap-2">
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Select
+                    aria-label="Von Jahr"
+                    size="sm"
+                    value={p.startYear}
+                    onChange={(v) => updatePhase(p.id, { startYear: v, endYear: Math.max(v, p.endYear) })}
+                    options={withValue(shortYearOptions, p.startYear)}
+                    className="min-w-0 flex-1"
+                  />
+                  <span className="text-xs text-muted">bis</span>
+                  <Select
+                    aria-label="Bis Jahr"
+                    size="sm"
+                    value={p.endYear}
+                    onChange={(v) => updatePhase(p.id, { endYear: v, startYear: Math.min(v, p.startYear) })}
+                    options={withValue(shortYearOptions, p.endYear)}
+                    className="min-w-0 flex-1"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <NumberInput aria-label="Netto-Betrag pro Monat" size="sm" value={p.monthlyNet} onChange={(v) => updatePhase(p.id, { monthlyNet: v ?? 0 })} suffix="€/Mon." min={0} className="w-32" />
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-2" title="Der Betrag steigt jedes Jahr mit der Inflationsrate.">
+                    <input type="checkbox" className="size-3.5 accent-(--accent)" checked={p.inflationAdjust} onChange={(e) => updatePhase(p.id, { inflationAdjust: e.target.checked })} />
+                    mit Inflation
+                  </label>
+                </div>
+              </div>
+              <IconButton label="Entfernen" variant="danger" onClick={() => onChange({ withdrawalPhases: config.withdrawalPhases.filter((x) => x.id !== p.id) })}>
+                <Trash2 size={15} />
+              </IconButton>
+            </div>
           ))}
         </ListBlock>
       </Section>
@@ -419,7 +500,7 @@ function WithdrawalSection({
     <Section icon={<HandCoins size={16} />} title="Entnahme" summary={summary} defaultOpen={w.enabled}>
       <Switch
         label="Entnahmephase planen"
-        description="Ab einem bestimmten Jahr Geld aus dem Depot entnehmen, z. B. als Zusatzrente."
+        description="Ab einem bestimmten Jahr dauerhaft Geld aus dem Depot entnehmen, z. B. als Zusatzrente. Einmalige und befristete Entnahmen findest du unter „Ereignisse“."
         checked={w.enabled}
         onChange={enable}
       />

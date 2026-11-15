@@ -19,6 +19,8 @@ export function defaultConfig(): SimulationConfig {
     savingsGrowth: 0,
     savingsSteps: [],
     lumpSums: [],
+    oneOffWithdrawals: [],
+    withdrawalPhases: [],
 
     totalReturn: 7,
     dividendYield: 2,

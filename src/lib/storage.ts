@@ -36,10 +36,15 @@ export function sanitize(input: unknown): SimulationConfig {
             ...x,
             id: typeof x.id === 'string' ? x.id : newId(),
           }))
+          .map((x: Record<string, unknown>) =>
+            key === 'withdrawalPhases' ? { ...x, inflationAdjust: x.inflationAdjust !== false } : x,
+          )
           .filter((x: Record<string, unknown>) =>
             key === 'savingsSteps'
               ? typeof x.year === 'number' && typeof x.monthlyAmount === 'number'
-              : typeof x.year === 'number' && typeof x.amount === 'number',
+              : key === 'withdrawalPhases'
+                ? typeof x.startYear === 'number' && typeof x.endYear === 'number' && typeof x.monthlyNet === 'number'
+                : typeof x.year === 'number' && typeof x.amount === 'number',
           );
       }
     } else if (typeof def === 'number') {

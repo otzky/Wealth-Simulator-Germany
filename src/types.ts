@@ -37,6 +37,23 @@ export interface LumpSum {
   label?: string;
 }
 
+/** A one-off withdrawal in January of the given calendar year, e.g. equity for a property. */
+export interface OneOffWithdrawal {
+  id: string;
+  year: number;
+  amount: number; // net: what should arrive in your account after tax
+  label?: string;
+}
+
+/** A temporary monthly withdrawal from January of `startYear` to December of `endYear`. */
+export interface WithdrawalPhase {
+  id: string;
+  startYear: number;
+  endYear: number;
+  monthlyNet: number; // net per month, in the money of the start year
+  inflationAdjust: boolean; // raise the amount every year by the inflation rate
+}
+
 export interface SimulationConfig {
   // Profile & horizon
   birthDate: string; // yyyy-mm-dd
@@ -51,6 +68,10 @@ export interface SimulationConfig {
   savingsGrowth: number; // % increase per year (Dynamik)
   savingsSteps: SavingsStep[];
   lumpSums: LumpSum[];
+
+  // Events that take money out
+  oneOffWithdrawals: OneOffWithdrawal[];
+  withdrawalPhases: WithdrawalPhase[];
 
   // Market
   totalReturn: number; // % p.a., incl. distributions
@@ -109,12 +130,15 @@ export interface YearRow {
   realFreedSavings: number;
   taxes: number; // taxes on distributions, Vorabpauschale and withdrawals
   advanceLumpSum: number; // Vorabpauschale (before tax)
-  withdrawalGross: number; // shares sold for withdrawals
+  withdrawalGross: number; // shares sold for monthly withdrawals (withdrawal phase + temporary withdrawals)
   withdrawalNet: number; // paid out after tax
   realWithdrawalNet: number;
   monthlyWithdrawalNet: number; // average per simulated month
   realMonthlyWithdrawalNet: number;
-  withdrawnTotalNet: number; // cumulative net withdrawals
+  oneOffGross: number; // shares sold for one-off withdrawals
+  oneOffNet: number; // one-off withdrawals paid out after tax
+  realOneOffNet: number;
+  withdrawnTotalNet: number; // cumulative net withdrawals, monthly and one-off
   costs: number; // fees + TER
   deflator: number; // cumulative inflation factor at year end
 }
@@ -141,7 +165,15 @@ export interface Summary {
   finalMonthlyDividendNet: number;
   finalMonthlyDividendNetReal: number;
   deflator: number;
-  withdrawal: WithdrawalSummary | null;
+  withdrawnGross: number; // all shares sold and paid out: withdrawal phase, temporary and one-off withdrawals
+  withdrawnNet: number;
+  withdrawnNetReal: number;
+  withdrawalTaxes: number; // taxes on those sales
+  oneOffNet: number; // part of withdrawnNet that came from one-off withdrawals
+  oneOffNetReal: number;
+  /** First year in which an event withdrawal could not be paid in full, with the missing net amount. */
+  eventShortfall: { year: number; missing: number } | null;
+  withdrawal: WithdrawalSummary | null; // the withdrawal phase (section "Entnahme") only
 }
 
 export interface WithdrawalSummary {
