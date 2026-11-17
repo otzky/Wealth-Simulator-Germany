@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "jsx": "react-jsx"
+  },
+  "include": ["./**/*.ts", "../src/lib/**/*.ts", "../src/defaults.ts", "../src/types.ts"],
+  "exclude": ["../src/lib/useMonteCarlo.ts", "../src/lib/mc.worker.ts", "../src/lib/export.ts", "../src/lib/storage.ts", "../src/lib/**/*.test.ts"]
+}

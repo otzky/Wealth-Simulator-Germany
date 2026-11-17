@@ -58,6 +58,104 @@ Die Simulation läuft monatlich mit konstanten Annahmen. Ein paar Regeln, die ma
   - *Grenzen*: Die Parameter stammen aus gut 56 Jahren eines Index; schwankende Inflation und eine langfristige Rückkehr zum Mittel sind nicht abgebildet. Die Ergebnisse hängen stark von Rendite und Volatilität ab.
 - **Nicht abgebildet**: schwankende Inflation, Crashs als einzelnes Ereignis, andere Einkünfte (Rente, bAV), Günstigerprüfung, Änderungen der Steuergesetze.
 
+## Schnittstelle für KI (MCP-Server und Kommandozeile)
+
+Damit eine KI (z. B. Claude Desktop) mit dem Simulator rechnen kann, statt Zahlen zu schätzen, gibt es einen lokalen MCP-Server. Er nutzt denselben Rechenkern wie die App, läuft komplett auf dem eigenen Rechner und sendet keine Daten nach außen.
+
+### Einrichten für andere: Erweiterung für Claude Desktop
+
+Wer nur rechnen lassen möchte, braucht weder das Repository noch Node:
+
+1. `wealth-simulator.mcpb` herunterladen (wird mit `npm run pack:agent` nach `dist-agent/` gebaut und als Release-Datei verteilt).
+2. Doppelklick auf die Datei (oder Claude Desktop → *Einstellungen → Erweiterungen* → Datei hineinziehen) und *Installieren*.
+3. Einen neuen Chat beginnen, z. B.: „Ich bin 52, habe 400.000 € im Depot, spare 2.000 € im Monat und möchte ab 63 monatlich 3.500 € entnehmen. Reicht das? Und was, wenn ich mit 60 aufhöre?“
+
+Die Erweiterung läuft vollständig auf dem eigenen Rechner. Optional lassen sich in den Einstellungen der Erweiterung die Adresse der Simulator-App (für die `app_link`-Links) und der Ordner für gespeicherte Pläne festlegen.
+
+### Einrichten aus dem Repository
+
+```bash
+npm install
+npm run build:agent      # erzeugt dist-agent/wealth-sim.mjs
+npm run pack:agent       # zusätzlich die Erweiterung dist-agent/wealth-simulator.mcpb
+```
+
+Ohne Erweiterung in Claude Desktop unter *Einstellungen → Entwickler → Konfiguration bearbeiten* (`claude_desktop_config.json`) eintragen und Claude Desktop neu starten. Windows-Beispiel:
+
+```json
+{
+  "mcpServers": {
+    "wealth-simulator": {
+      "command": "node",
+      "args": ["C:\\Users\\<Name>\\Documents\\Wealth-Simulator-Germany\\dist-agent\\wealth-sim.mjs", "mcp"]
+    }
+  }
+}
+```
+
+Andere MCP-fähige Programme starten den Server genauso: `node dist-agent/wealth-sim.mjs mcp` (stdio).
+
+### Eigenen Plan übergeben (optional)
+
+Ohne gespeicherten Plan wird jede Rechnung neu aufgesetzt (siehe unten). Wer seinen Plan aus der App nutzen möchte: Die App speichert im Browser; dort kommt der Server nicht hin. Deshalb: in der App **Link teilen**, den Link der KI geben („importiere meinen Plan“) – sie ruft `plans` mit `import_link` auf. Der Plan wird zum Standardplan und liegt in `~/.wealth-simulator/plans.json` (Windows: `C:\Users\<Name>\.wealth-simulator\plans.json`; ändern mit der Umgebungsvariable `WEALTH_SIM_HOME`). Nach Änderungen in der App den Link einfach erneut importieren.
+
+### Werkzeuge
+
+| Werkzeug | Zweck |
+|---|---|
+| `describe` | Alle Felder mit Typ, Einheit, Standardwert und Bedeutung sowie die Modellannahmen |
+| `simulate` | Plan ohne Marktschwankungen: Endwerte, Dividenden, Entnahmen, Ziel, Warnungen, Meilensteine (`detail: "years"` für alle Jahre) |
+| `monte_carlo` | Erfolgsquote, Perzentile, bezahlte Entnahmen, Leitplanken-Statistik; optional sichere Entnahme (`safe_probability`) |
+| `solve` | Gesuchten Wert berechnen: Entnahme für ein Restvermögen, sichere Entnahme oder nötige Sparrate/Startkapital/Rendite für ein Ziel |
+| `compare` | Bis zu 8 Szenarien nebeneinander, optional mit Monte Carlo auf denselben Zufallsverläufen |
+| `plans` | Pläne auflisten, lesen, speichern, löschen, Standard setzen, Teilen-Link importieren |
+
+Die Ressource `wealth-sim://model` beschreibt das Modell als Markdown.
+
+### Neue Rechnung, Ausgangspunkt und Änderungen
+
+Eine Rechnung lässt sich jederzeit von Null starten. Nur die persönlichen Eckdaten müssen angegeben werden – Alter (`age` oder `birthDate`), Startkapital (`initialCapital`), Sparrate (`monthlySavings`) und Rendite (`totalReturn`). Steuern, Inflation, Kosten, Ausschüttung und Fondsart haben sinnvolle Standardwerte. Fehlt eine Eckdate, rechnet der Server mit einem Platzhalter und sagt das in `notes`, damit die KI nachfragt statt zu raten.
+
+```json
+{ "changes": { "age": 28, "initialCapital": 30000, "monthlySavings": 800, "totalReturn": 7 } }
+```
+
+Bei einer neuen Rechnung richten sich die übrigen altersabhängigen Werte nach der Person, nicht nach festen Jahreszahlen: Ohne Entnahme läuft die Rechnung bis zum Rentenalter 67 (wer älter ist: 20 Jahre), mit Entnahme bis zur Lebenserwartung (Standard 90, mindestens 10 Jahre über dem heutigen Alter). Die Entnahme beginnt standardmäßig mit 67, bei Älteren sofort. `withdrawal.startAge` (z. B. 60) ist eine Abkürzung für das Startjahr und meint den ersten Januar, an dem die Person dieses Alter erreicht hat. Alles davon nennt die Antwort unter `notes` und lässt sich überschreiben (`durationMode`/`targetAge`/`durationYears`, `withdrawal.lifeExpectancy`).
+
+Jede Berechnung hat einen Ausgangspunkt `base` und optional `changes`:
+
+- `base`: `"auto"` (Standard: der gespeicherte Standardplan, wenn es einen gibt, sonst Standardwerte), `"defaults"` (immer neue Rechnung, auch wenn ein Plan gespeichert ist), `"saved"`, `"plan:<Name>"` oder `"result:<id>"` (ein früheres Ergebnis derselben Sitzung weiterdrehen, z. B. `"result:r3"`).
+- `changes`: nur das, was abweichen soll, verschachtelt wie die Konfiguration. Objekte werden zusammengeführt, Listen (Ereignisse) ersetzen die bisherige Liste vollständig. `age` ist eine Abkürzung für das Geburtsdatum, `withdrawal.startAge` für das Startjahr der Entnahme.
+
+Szenarien durchspielen mit `compare`: Die gemeinsamen Eckdaten stehen einmal oben, jedes Szenario nennt nur seinen Unterschied.
+
+```json
+{ "changes": { "age": 28, "initialCapital": 30000, "monthlySavings": 800 },
+  "scenarios": [
+    { "name": "5 %", "changes": { "totalReturn": 5 } },
+    { "name": "7 %", "changes": { "totalReturn": 7 } },
+    { "name": "7 %, 1000 € Sparrate", "changes": { "totalReturn": 7, "monthlySavings": 1000 } },
+    { "name": "Wohnung 2034", "changes": { "totalReturn": 7, "oneOffWithdrawals": [{ "year": 2034, "amount": 80000, "label": "Wohnung" }] } } ],
+  "monte_carlo": true }
+```
+
+Jede Antwort enthält `result_id`, den Ausgangspunkt, unter `changed` die wirksamen Abweichungen, unter `notes` angenommene oder korrigierte Werte, Warnungen und einen `app_link`, der das Szenario in der App öffnet. Mit `plans` / `save` wird ein Ergebnis dauerhaft gespeichert. Unbekannte Felder werden abgelehnt statt still ignoriert. Monte Carlo nutzt einen festen Startwert, gleiche Eingaben ergeben also gleiche Ergebnisse. Die App-Adresse für Links lässt sich mit `WEALTH_SIM_APP_URL` ändern (Standard `http://localhost:3000/`).
+
+### Kommandozeile
+
+Dieselben Werkzeuge ohne KI, Ausgabe als JSON:
+
+```bash
+node dist-agent/wealth-sim.mjs help
+node dist-agent/wealth-sim.mjs import "http://localhost:3000/#s=..." "Mein Plan"
+node dist-agent/wealth-sim.mjs simulate '{"changes":{"age":28,"initialCapital":30000,"monthlySavings":800}}'
+node dist-agent/wealth-sim.mjs simulate
+node dist-agent/wealth-sim.mjs solve '{"target":"safe_withdrawal","probability":0.9}'
+node dist-agent/wealth-sim.mjs compare @szenarien.json
+```
+
+In PowerShell JSON besser in eine Datei schreiben und mit `@datei.json` übergeben, weil PowerShell Anführungszeichen umschreibt.
+
 ## Entwicklung
 
 Voraussetzung: Node.js 20 oder neuer.
@@ -67,6 +165,9 @@ npm install
 npm run dev        # http://localhost:3000
 npm test           # Tests der Rechenlogik
 npm run build      # Produktions-Build nach dist/
+npm run build:agent      # MCP-Server/Kommandozeile nach dist-agent/
+npm run pack:agent       # Erweiterung für Claude Desktop (.mcpb)
+npm run typecheck:agent  # Typprüfung der Schnittstelle
 ```
 
 ## Aufbau
@@ -79,9 +180,19 @@ src/
   lib/regimes.ts      Regime-Modell der Renditen (geschätzte Parameter)
   lib/mc.worker.ts    Web Worker für Monte Carlo
   lib/random.ts       Zufallszahlen mit Startwert
-  lib/storage.ts      Speichern, Teilen-Links
+  lib/config.ts       Prüfen und Ergänzen von Konfigurationen
+  lib/storage.ts      Speichern im Browser, Teilen-Links
   lib/export.ts       PDF/PNG/CSV
   components/         Oberfläche (Einstellungen, Ergebnisse, Charts, Monte-Carlo-Tab)
+agent/
+  tools.ts            Werkzeuge der KI-Schnittstelle (gemeinsam für MCP und Kommandozeile)
+  scenario.ts         Ausgangspunkt + Änderungen, Prüfung, Hinweise, Unterschiede
+  fields.ts           Beschreibung aller Felder
+  model.ts            Modellbeschreibung (Ressource)
+  store.ts            Gespeicherte Pläne (JSON-Datei)
+  share.ts            Teilen-Links lesen und erzeugen
+  server.ts, cli.ts   MCP-Server (stdio) und Kommandozeile
+  build.mjs, pack.mjs Bündeln, Erweiterung (.mcpb) bauen
 ```
 
 ## Hinweis
