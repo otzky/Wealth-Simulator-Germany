@@ -1,10 +1,10 @@
-import { setting } from './env';
+import { setting } from './env.js';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { sanitize } from '../src/lib/config';
-import type { SimulationConfig } from '../src/types';
-import type { PlanStore } from './scenario';
+import { sanitize } from '../src/lib/config.js';
+import type { SimulationConfig } from '../src/types.js';
+import type { PlanStore } from './scenario.js';
 
 interface FileData {
   default: string | null;
@@ -71,7 +71,7 @@ export class FilePlanStore implements PlanStore {
   }
 }
 
-/** Plans kept in memory only, for tests. */
+/** Plans kept in memory only: for tests and the hosted server, which stores nothing. */
 export class MemoryPlanStore implements PlanStore {
   private plans = new Map<string, { savedAt: string; config: SimulationConfig }>();
   private def: string | null = null;

@@ -170,3 +170,22 @@ describe('different people', () => {
     expect(r.horizon.end_age).toBeGreaterThan(88);
   });
 });
+
+describe('hosted without storage', () => {
+  const stateless = () => new AgentTools(new MemoryPlanStore(), 'https://x.example/', true);
+
+  it('result ids carry the configuration, so another instance can continue', () => {
+    const a = stateless().simulate({ changes: { age: 35, initialCapital: 50000, monthlySavings: 1000, totalReturn: 7 } });
+    expect(a.result_id.startsWith('x')).toBe(true);
+    const b = stateless().simulate({ base: `result:${a.result_id}`, changes: { monthlySavings: 1500 } });
+    expect(Object.keys(b.changed)).toEqual(['monthlySavings']);
+    expect(b.horizon.end_age).toBe(a.horizon.end_age);
+  });
+
+  it('takes a plan straight from an app link', () => {
+    const t = stateless();
+    const a = t.simulate({ changes: { age: 40, initialCapital: 80000, monthlySavings: 700 } });
+    expect(t.simulate({ base: `link:${a.app_link}` }).end.value).toBe(a.end.value);
+    expect(() => t.simulate({ base: 'link:https://x.example/#s=kaputt' })).toThrow(InputError);
+  });
+});

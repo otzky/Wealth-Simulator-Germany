@@ -1,12 +1,12 @@
-import { evaluateGoal, solveGoal } from '../src/lib/goal';
-import { canSolveSafeWithdrawal, quantile, runMonteCarlo, solveSafeWithdrawal, type MonteCarloResult } from '../src/lib/montecarlo';
-import { runSimulation, solveWithdrawal, withdrawalActive } from '../src/lib/simulation';
-import { sanitize } from '../src/lib/config';
-import type { GoalVariable, SimulationConfig, SimulationResult, YearRow } from '../src/types';
-import { fieldDocs } from './fields';
-import { MODEL_NOTES } from './model';
-import { InputError, merge, prepare, ResultCache, type PlanStore, type Prepared } from './scenario';
-import { readShareLink, shareLink } from './share';
+import { evaluateGoal, solveGoal } from '../src/lib/goal.js';
+import { canSolveSafeWithdrawal, quantile, runMonteCarlo, solveSafeWithdrawal, type MonteCarloResult } from '../src/lib/montecarlo.js';
+import { runSimulation, solveWithdrawal, withdrawalActive } from '../src/lib/simulation.js';
+import { sanitize } from '../src/lib/config.js';
+import type { GoalVariable, SimulationConfig, SimulationResult, YearRow } from '../src/types.js';
+import { fieldDocs } from './fields.js';
+import { MODEL_NOTES } from './model.js';
+import { InputError, merge, prepare, ResultCache, type PlanStore, type Prepared } from './scenario.js';
+import { readShareLink, shareLink } from './share.js';
 
 /** Euros rounded to whole numbers, shares to one decimal place in %. */
 const eur = (v: number) => Math.round(v);
@@ -19,11 +19,14 @@ export interface ScenarioArgs {
 
 /** The tools, independent of how they are called (MCP or command line). */
 export class AgentTools {
-  readonly cache = new ResultCache();
+  readonly cache: ResultCache;
   constructor(
     readonly store: PlanStore,
     private readonly linkBase?: string,
-  ) {}
+    stateless = false,
+  ) {
+    this.cache = new ResultCache(stateless);
+  }
 
   private link(cfg: SimulationConfig) {
     return shareLink(cfg, this.linkBase);

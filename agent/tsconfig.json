@@ -5,6 +5,6 @@
     "types": ["node"],
     "jsx": "react-jsx"
   },
-  "include": ["./**/*.ts", "../src/lib/**/*.ts", "../src/defaults.ts", "../src/types.ts"],
+  "include": ["./**/*.ts", "../api/*.ts", "../middleware.ts", "../src/lib/**/*.ts", "../src/defaults.ts", "../src/types.ts"],
   "exclude": ["../src/lib/useMonteCarlo.ts", "../src/lib/mc.worker.ts", "../src/lib/export.ts", "../src/lib/storage.ts", "../src/lib/**/*.test.ts"]
 }

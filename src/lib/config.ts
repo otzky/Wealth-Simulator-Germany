@@ -1,6 +1,6 @@
 /** Checking configurations from untrusted sources (saved data, links, AI tools). No browser APIs. */
-import { defaultConfig } from '../defaults';
-import type { SimulationConfig } from '../types';
+import { defaultConfig } from '../defaults.js';
+import type { SimulationConfig } from '../types.js';
 
 /** Merge untrusted data onto the defaults, keeping only keys with the right type. */
 export function sanitize(input: unknown): SimulationConfig {

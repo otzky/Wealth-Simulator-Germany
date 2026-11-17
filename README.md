@@ -95,6 +95,22 @@ Ohne Erweiterung in Claude Desktop unter *Einstellungen → Entwickler → Konfi
 
 Andere MCP-fähige Programme starten den Server genauso: `node dist-agent/wealth-sim.mjs mcp` (stdio).
 
+### Privat hosten auf Vercel (mit Passwort)
+
+App und MCP lassen sich auf Vercel (auch im kostenlosen Hobby-Plan) für einen geschlossenen Kreis bereitstellen. Beides ist durch ein Passwort geschützt, das **nur in Vercel** hinterlegt wird – im Repository steht es nirgends.
+
+1. Auf [vercel.com](https://vercel.com) *Add New → Project*, dieses GitHub-Repository importieren. Vercel erkennt Vite automatisch; nichts weiter einstellen.
+2. Unter *Environment Variables* die Variable `SITE_PASSWORD` mit dem gewünschten Passwort anlegen (für *Production* und *Preview*), dann *Deploy*.
+3. Die App fragt beim Öffnen per Browser-Dialog nach Benutzername und Passwort; der Benutzername ist egal.
+4. Den MCP in Claude (Einstellungen → Connectors → eigenen Connector hinzufügen) oder einem anderen MCP-Programm mit dieser Adresse eintragen:
+   `https://<projekt>.vercel.app/api/mcp?key=<Passwort>`
+
+Ohne `SITE_PASSWORD` bleibt alles gesperrt. Passwort ändern: Variable in Vercel ändern und neu deployen (*Deployments → Redeploy*).
+
+Die gehostete Variante speichert nichts: Es gibt dort kein Werkzeug `plans`. Ein Plan aus der App wird mit `base: "link:<Teilen-Link>"` übernommen, und Ergebnis-Kennungen (`result:x…`) enthalten ihre Konfiguration selbst, sodass sich ein Ergebnis auch ohne Speicher weiterdrehen lässt. Die Links in den Antworten zeigen auf die eigene Vercel-Adresse.
+
+Technik: `middleware.ts` sperrt die App (Vercel Routing Middleware, Basic Auth), `api/mcp.ts` ist der MCP-Endpunkt (Streamable HTTP, zustandslos), `vercel.json` erlaubt ihm 60 Sekunden Laufzeit. Weil Vercel Funktionen Datei für Datei übersetzt, tragen die Importe entlang dieses Pfads die Endung `.js`.
+
 ### Eigenen Plan übergeben (optional)
 
 Ohne gespeicherten Plan wird jede Rechnung neu aufgesetzt (siehe unten). Wer seinen Plan aus der App nutzen möchte: Die App speichert im Browser; dort kommt der Server nicht hin. Deshalb: in der App **Link teilen**, den Link der KI geben („importiere meinen Plan“) – sie ruft `plans` mit `import_link` auf. Der Plan wird zum Standardplan und liegt in `~/.wealth-simulator/plans.json` (Windows: `C:\Users\<Name>\.wealth-simulator\plans.json`; ändern mit der Umgebungsvariable `WEALTH_SIM_HOME`). Nach Änderungen in der App den Link einfach erneut importieren.
@@ -124,7 +140,7 @@ Bei einer neuen Rechnung richten sich die übrigen altersabhängigen Werte nach 
 
 Jede Berechnung hat einen Ausgangspunkt `base` und optional `changes`:
 
-- `base`: `"auto"` (Standard: der gespeicherte Standardplan, wenn es einen gibt, sonst Standardwerte), `"defaults"` (immer neue Rechnung, auch wenn ein Plan gespeichert ist), `"saved"`, `"plan:<Name>"` oder `"result:<id>"` (ein früheres Ergebnis derselben Sitzung weiterdrehen, z. B. `"result:r3"`).
+- `base`: `"auto"` (Standard: der gespeicherte Standardplan, wenn es einen gibt, sonst Standardwerte), `"defaults"` (immer neue Rechnung, auch wenn ein Plan gespeichert ist), `"saved"`, `"plan:<Name>"`, `"result:<id>"` (ein früheres Ergebnis weiterdrehen, z. B. `"result:r3"`) oder `"link:<Teilen-Link>"` (Plan direkt aus der App).
 - `changes`: nur das, was abweichen soll, verschachtelt wie die Konfiguration. Objekte werden zusammengeführt, Listen (Ereignisse) ersetzen die bisherige Liste vollständig. `age` ist eine Abkürzung für das Geburtsdatum, `withdrawal.startAge` für das Startjahr der Entnahme.
 
 Szenarien durchspielen mit `compare`: Die gemeinsamen Eckdaten stehen einmal oben, jedes Szenario nennt nur seinen Unterschied.
@@ -191,7 +207,11 @@ agent/
   model.ts            Modellbeschreibung (Ressource)
   store.ts            Gespeicherte Pläne (JSON-Datei)
   share.ts            Teilen-Links lesen und erzeugen
-  server.ts, cli.ts   MCP-Server (stdio) und Kommandozeile
+  mcp.ts              Werkzeuge als MCP-Server (gemeinsam für lokal und gehostet)
+  server.ts, cli.ts   Lokaler MCP-Server (stdio) und Kommandozeile
+  remote.ts           Gehosteter MCP-Endpunkt (HTTP, ohne Speicher, mit Schlüssel)
+api/mcp.ts            Vercel-Funktion für den MCP-Endpunkt
+middleware.ts         Passwortsperre der App auf Vercel
   build.mjs, pack.mjs Bündeln, Erweiterung (.mcpb) bauen
 ```
 

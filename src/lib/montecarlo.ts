@@ -1,8 +1,8 @@
-import type { SimulationConfig, SimulationResult } from '../types';
-import { meetsGoal } from './goal';
-import { gaussian, mulberry32, pathSeed } from './random';
-import { regimeModel } from './regimes';
-import { guardrailGuide, horizonMonths, resolveWithdrawal, simulate, usesLifeExpectancy, withdrawalActive, withFixedWithdrawal } from './simulation';
+import type { SimulationConfig, SimulationResult } from '../types.js';
+import { meetsGoal } from './goal.js';
+import { gaussian, mulberry32, pathSeed } from './random.js';
+import { regimeModel } from './regimes.js';
+import { guardrailGuide, horizonMonths, resolveWithdrawal, simulate, usesLifeExpectancy, withdrawalActive, withFixedWithdrawal } from './simulation.js';
 
 /**
  * Monte Carlo: the same plan, simulated many times with random monthly returns.

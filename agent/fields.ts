@@ -1,4 +1,4 @@
-import { defaultConfig } from '../src/defaults';
+import { defaultConfig } from '../src/defaults.js';
 
 /** Description of one configuration field, for `describe` and for checking changes. */
 export interface FieldDoc {

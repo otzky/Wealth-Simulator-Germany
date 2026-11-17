@@ -1,4 +1,4 @@
-import type { FundType, SimulationConfig, SimulationResult, Summary, WithdrawalSummary, WithdrawalTarget, YearRow } from '../types';
+import type { FundType, SimulationConfig, SimulationResult, Summary, WithdrawalSummary, WithdrawalTarget, YearRow } from '../types.js';
 
 /** Teilfreistellung (§ 20 InvStG): tax-free share of fund income. */
 export const PARTIAL_EXEMPTION: Record<FundType, number> = {

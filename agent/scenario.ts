@@ -1,7 +1,9 @@
-import { defaultConfig } from '../src/defaults';
-import { sanitize } from '../src/lib/config';
-import type { SimulationConfig } from '../src/types';
-import { KEY_FIELDS, PERSONAL_FIELDS, LIST_ITEM_KEYS } from './fields';
+import { defaultConfig } from '../src/defaults.js';
+import { sanitize } from '../src/lib/config.js';
+import type { SimulationConfig } from '../src/types.js';
+import { InputError } from './errors.js';
+import { KEY_FIELDS, PERSONAL_FIELDS, LIST_ITEM_KEYS } from './fields.js';
+import { readShareLink } from './share.js';
 
 /** Where saved plans live. Implemented on top of a JSON file by store.ts. */
 export interface PlanStore {
@@ -13,22 +15,50 @@ export interface PlanStore {
   setDefault(name: string): boolean;
 }
 
-/** Results of this session, so later calls can build on them ("result:r3"). */
+/**
+ * Results, so later calls can build on them ("result:<id>").
+ * Normally kept in memory for the session ("r3"). Without memory (stateless, e.g. on a server
+ * that forgets everything between requests) the id itself carries the configuration ("x…").
+ */
 export class ResultCache {
   private items = new Map<string, { config: SimulationConfig; label: string }>();
   private n = 0;
+  constructor(private readonly stateless = false) {}
   add(config: SimulationConfig, label: string): string {
+    if (this.stateless) return encodeResult(config);
     const id = `r${++this.n}`;
     this.items.set(id, { config, label });
     if (this.items.size > 500) this.items.delete(this.items.keys().next().value!);
     return id;
   }
   get(id: string) {
+    if (id.startsWith('x')) {
+      const config = decodeResult(id);
+      return config ? { config, label: 'aus der Ergebnis-Kennung' } : null;
+    }
     return this.items.get(id) ?? null;
   }
 }
 
-export class InputError extends Error {}
+/** Only what differs from the standard values (plus the start date), so ids stay short. */
+function encodeResult(cfg: SimulationConfig): string {
+  const d = defaultConfig() as unknown as Record<string, unknown>;
+  const c = cfg as unknown as Record<string, unknown>;
+  const part: Record<string, unknown> = { startDate: cfg.startDate };
+  for (const k of Object.keys(c)) if (JSON.stringify(c[k]) !== JSON.stringify(d[k])) part[k] = c[k];
+  return 'x' + Buffer.from(JSON.stringify(part), 'utf8').toString('base64url');
+}
+
+function decodeResult(id: string): SimulationConfig | null {
+  try {
+    const part = JSON.parse(Buffer.from(id.slice(1), 'base64url').toString('utf8'));
+    return sanitize({ ...defaultConfig(), ...part });
+  } catch {
+    return null;
+  }
+}
+
+export { InputError } from './errors.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -39,7 +69,8 @@ const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.i
  * - "saved": the default saved plan
  * - "defaults": the simulator's standard values (a calculation from scratch)
  * - "plan:<name>": a saved plan by name
- * - "result:<id>": the configuration behind an earlier result of this session
+ * - "result:<id>": the configuration behind an earlier result
+ * - "link:<share link>": a plan from the app's "Teilen" button
  */
 export function resolveBase(base: string | undefined, store: PlanStore, cache: ResultCache): { label: string; config: SimulationConfig; fromScratch: boolean } {
   const b = (base ?? 'auto').trim() || 'auto';
@@ -67,12 +98,15 @@ export function resolveBase(base: string | undefined, store: PlanStore, cache: R
     if (!cfg) throw new InputError(`Kein gespeicherter Plan „${name}“. Vorhanden: ${store.list().map((p) => p.name).join(', ') || 'keine'}.`);
     return { label: `Plan „${name}“`, config: cfg, fromScratch: false };
   }
+  if (b.startsWith('link:')) {
+    return { label: 'Plan aus dem Teilen-Link', config: sanitize(readShareLink(b.slice(5))), fromScratch: false };
+  }
   if (b.startsWith('result:')) {
     const hit = cache.get(b.slice(7));
-    if (!hit) throw new InputError(`Ergebnis „${b.slice(7)}“ ist nicht (mehr) bekannt. Ergebnisse gelten nur innerhalb einer Sitzung.`);
+    if (!hit) throw new InputError(`Ergebnis „${b.slice(7)}“ ist nicht (mehr) bekannt. Ergebnisse gelten nur innerhalb einer Sitzung; die Rechnung bitte mit base und changes neu aufsetzen.`);
     return { label: `Ergebnis ${b.slice(7)} (${hit.label})`, config: hit.config, fromScratch: false };
   }
-  throw new InputError(`Unbekannte base „${b}“. Erlaubt: "auto", "saved", "defaults", "plan:<name>", "result:<id>".`);
+  throw new InputError(`Unbekannte base „${b}“. Erlaubt: "auto", "saved", "defaults", "plan:<name>", "result:<id>", "link:<Teilen-Link>".`);
 }
 
 /** Rejects keys that the configuration does not have, with the allowed keys as a hint. */

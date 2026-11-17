@@ -1,6 +1,6 @@
-import { setting } from './env';
-import type { SimulationConfig } from '../src/types';
-import { InputError } from './scenario';
+import { setting } from './env.js';
+import type { SimulationConfig } from '../src/types.js';
+import { InputError } from './errors.js';
 
 /** Address of the app; links open the scenario there. */
 export function appUrl(): string {

@@ -1,4 +1,4 @@
-import type { SimulationConfig } from './types';
+import type { SimulationConfig } from './types.js';
 
 function today() {
   const d = new Date();

@@ -1,5 +1,5 @@
-import type { GoalResult, GoalVariable, SimulationConfig, SimulationResult, YearRow } from '../types';
-import { runSimulation } from './simulation';
+import type { GoalResult, GoalVariable, SimulationConfig, SimulationResult, YearRow } from '../types.js';
+import { runSimulation } from './simulation.js';
 
 type Goal = SimulationConfig['goal'];
 
