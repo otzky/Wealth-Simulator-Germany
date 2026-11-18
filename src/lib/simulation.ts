@@ -230,10 +230,25 @@ interface Lot {
  * grows at exactly the expected rate.
  *
  * `guide` switches guardrails on (Monte Carlo only); see guardrailGuide. Without it they never act.
+ *
+ * `inflation` (Monte Carlo only) holds the inflation rate in % for each calendar year of the
+ * simulation (index 0 = the start year). Without it every year has the planned inflation.
+ * Inflation-adjusted withdrawals rise each January by the inflation of the years since they began.
  */
-export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guide?: GuardrailGuide): SimulationResult {
+export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guide?: GuardrailGuide, inflation?: ArrayLike<number>): SimulationResult {
   const start = parseDate(cfg.startDate);
   const months = horizonMonths(cfg);
+  const inflationIn = (year: number) => (inflation && year >= start.y && year - start.y < inflation.length ? inflation[year - start.y] : cfg.inflation);
+  // Price level at the start of each calendar year relative to the start year (index 0 = 1)
+  const lastYear = start.y + Math.ceil((start.m - 1 + months) / 12);
+  const priceLevel = [1];
+  for (let yr = start.y; yr < lastYear; yr++) priceLevel.push(priceLevel[priceLevel.length - 1] * (1 + inflationIn(yr) / 100));
+  /** Growth of prices from January of `from` to January of `to`. */
+  const priceGrowth = (from: number, to: number) => {
+    if (!inflation) return Math.pow(1 + cfg.inflation / 100, to - from);
+    const at = (yr: number) => (yr <= start.y ? Math.pow(1 + cfg.inflation / 100, yr - start.y) : priceLevel[Math.min(yr - start.y, priceLevel.length - 1)]);
+    return at(to) / at(from);
+  };
 
   const taxRate = effectiveTaxRate(cfg);
   const exemption = PARTIAL_EXEMPTION[cfg.fundType];
@@ -241,7 +256,7 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guid
   const priceRate = monthlyRate(cfg.totalReturn - cfg.dividendYield);
   const divRate = monthlyRate(cfg.dividendYield);
   const terKeep = Math.pow(1 - cfg.ter / 100, 1 / 12);
-  const inflRate = monthlyRate(cfg.inflation);
+  let inflRate = monthlyRate(cfg.inflation);
   const w = cfg.withdrawal;
   const phases = cfg.withdrawalPhases.filter((p) => p.monthlyNet > 0 && p.endYear >= p.startYear);
 
@@ -446,13 +461,14 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guid
       savings = savingsForYear(cfg, year);
       freed = savingsForYear(cfg, year, true) - savings;
       reinvest = reinvestsIn(cfg, year);
+      inflRate = monthlyRate(inflationIn(year));
       inPhase = w.enabled && year >= w.startYear;
-      phaseGrowth = w.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - w.startYear) : 1;
+      phaseGrowth = w.inflationAdjust ? priceGrowth(w.startYear, year) : 1;
       yIdx++;
       if (useGuardrails && inPhase && year > w.startYear && value > EMPTY) {
         // A year with a loss (price plus distributions): this year's inflation increase is skipped.
         const lastReturn = (price / yearPrice) * Math.pow(1 + divRate, 12) - 1;
-        if (w.inflationAdjust && lastReturn < 0) level /= 1 + cfg.inflation / 100;
+        if (w.inflationAdjust && lastReturn < 0) level /= priceGrowth(year - 1, year);
         // Can the depot still carry the planned amount until the end? Compare with what it can carry.
         const full = w.monthlyNet * phaseGrowth;
         const carry = sustainableMonthly(cfg, value, months - i, guide!.endWealth, guide!.netShare[yIdx] || 1);
@@ -488,7 +504,7 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guid
       for (const p of phases) {
         if (year < p.startYear || year > p.endYear) continue;
         tempIds.push(p.id);
-        tempTarget += p.monthlyNet * (p.inflationAdjust ? Math.pow(1 + cfg.inflation / 100, year - p.startYear) : 1);
+        tempTarget += p.monthlyNet * (p.inflationAdjust ? priceGrowth(p.startYear, year) : 1);
       }
     }
     y.months++;

@@ -19,6 +19,8 @@ ctx.onmessage = (e: MessageEvent<McRequest>) => {
         result.success.buffer,
         result.paidAll.buffer,
         result.endValues.buffer,
+        result.endDeflators.buffer,
+        result.pathDeflators.buffer,
         result.depletedAge.buffer,
       ]);
     } else {

@@ -66,8 +66,10 @@ function Intro({ onEnable }: { onEnable: () => void }) {
 function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: Omit<Props, 'mc'> & { mc: McState; r: MonteCarloResult }) {
   const real = basis === 'real';
   const Y = r.years.length;
-  const endDiv = real ? r.deflators[Y - 1] : 1;
-  const end = (arr: number[]) => arr[Y - 1] / endDiv;
+  // Purchasing power: each path with its own inflation, the plan with the entered one
+  const pct = real ? r.percentilesReal : r.percentiles;
+  const end = (arr: number[]) => arr[Y - 1];
+  const planEnd = r.plan[Y - 1] / (real ? r.deflators[Y - 1] : 1);
   const [log, setLog] = useState(false);
   const byOutcome = r.metric === 'plan';
   const w = config.withdrawal;
@@ -126,6 +128,14 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
             >
               {pct0(r.successRate)}
             </p>
+            <p className="mt-1.5 flex items-center gap-1 text-xs text-muted">
+              Bei 1 Prozentpunkt weniger Rendite: <span className="tnum">{pct0(r.successRateLowerReturn)}</span>
+              <Hint>
+                Die erwartete Rendite ist selbst unsicher: Auch gut 50 Jahre Börsengeschichte legen sie nur auf etwa ±2 Prozentpunkte fest. Diese Zahl
+                rechnet dieselben Verläufe mit {formatNumber(Math.round((config.totalReturn - 1) * 10) / 10)} % statt {formatNumber(config.totalReturn)} % – so
+                siehst du, wie stark das Ergebnis an der Annahme hängt.
+              </Hint>
+            </p>
             <p className="mt-3 text-[14px] leading-snug text-ink-2">
               In <span className="tnum font-medium text-ink">{formatNumber(successCount)}</span> von {formatNumber(r.runs)} Verläufen{' '}
               {r.metric === 'plan'
@@ -144,10 +154,10 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
             )}
           </div>
           <dl className="grid grid-cols-2 gap-3">
-            <Mini label="Median am Ende" hint="Die Hälfte der Verläufe endet darüber, die Hälfte darunter." value={formatEuroCompact(end(r.percentiles.p50))} />
-            <Mini label="Plan ohne Schwankungen" value={formatEuroCompact(end(r.plan))} />
-            <Mini label="Schlechte 10 %" hint="Jeder zehnte Verlauf endet unter diesem Wert." value={formatEuroCompact(end(r.percentiles.p10))} tone="bad" />
-            <Mini label="Gute 10 %" hint="Jeder zehnte Verlauf endet über diesem Wert." value={formatEuroCompact(end(r.percentiles.p90))} tone="good" />
+            <Mini label="Median am Ende" hint="Die Hälfte der Verläufe endet darüber, die Hälfte darunter." value={formatEuroCompact(end(pct.p50))} />
+            <Mini label="Plan ohne Schwankungen" value={formatEuroCompact(planEnd)} />
+            <Mini label="Schlechte 10 %" hint="Jeder zehnte Verlauf endet unter diesem Wert." value={formatEuroCompact(end(pct.p10))} tone="bad" />
+            <Mini label="Gute 10 %" hint="Jeder zehnte Verlauf endet über diesem Wert." value={formatEuroCompact(end(pct.p90))} tone="good" />
             {r.goalRate != null && <Mini label="Ziel erreicht" hint="Anteil der Verläufe, die das Ziel aus dem Abschnitt „Ziel“ erreichen." value={pct0(r.goalRate)} />}
           </dl>
         </div>
@@ -208,7 +218,9 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
         zufällig zwischen ruhigen Phasen (im Mittel rund 17 Monate) und Krisen (rund 5 Monate, etwa ein Viertel der Zeit). So entstehen
         mehrmonatige Einbrüche, harte Jahre und lange Durststrecken wie in der Realität. Im Durchschnitt wachsen die Verläufe mit der
         unter „Markt“ eingetragenen Rendite – so, wie Index-Renditen über die Geschichte berechnet werden; der Median liegt etwas darüber.
-        Die Volatilität skaliert die Schwankung. Inflation, Ausschüttungsquote, Kosten, Steuern und Ereignisse bleiben wie im Plan. Die
+        Die Volatilität skaliert die Schwankung. Die Inflation schwankt von Jahr zu Jahr um den eingetragenen Wert – Phasen hoher Inflation
+        halten wie in den 1970ern oder 2022 einige Jahre an und treffen eher schwache Börsenjahre (geschätzt auf der deutschen Inflation seit
+        1970). Ausschüttungsquote, Kosten, Steuern und Ereignisse bleiben wie im Plan. Die
         Ergebnisse hängen stark von Rendite und Volatilität ab und sind eine Orientierung, keine genaue Wahrscheinlichkeit.
       </p>
     </div>
@@ -217,13 +229,13 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
 
 /** How far the paths end from the wanted wealth – a strict "success" alone hides near misses. */
 function TargetBreakdown({ r, target, age }: { r: MonteCarloResult; target: { endWealth: number; basis: ValueBasis }; age: number }) {
-  const d = target.basis === 'real' ? r.deflators[r.years.length - 1] : 1;
+  const real = target.basis === 'real';
   const stats = useMemo(() => {
     const t = target.endWealth;
     const c = { hit: 0, near: 0, below: 0, failed: 0 };
     const ends = new Float64Array(r.runs);
     for (let i = 0; i < r.runs; i++) {
-      const v = r.endValues[i] / d;
+      const v = r.endValues[i] / (real ? r.endDeflators[i] : 1);
       ends[i] = v;
       if (!r.paidAll[i]) c.failed++;
       else if (v >= t) c.hit++;
@@ -242,7 +254,7 @@ function TargetBreakdown({ r, target, age }: { r: MonteCarloResult; target: { en
       atLeast90: quantile(ends, 0.1),
       median: quantile(ends, 0.5),
     };
-  }, [r, d, target.endWealth]);
+  }, [r, real, target.endWealth]);
   const unit = target.basis === 'real' ? ' Kaufkraft' : '';
   return (
     <div className="mt-4 rounded-xl bg-surface-2 px-4 py-3">
@@ -287,14 +299,14 @@ function FanCard({ r, real }: { r: MonteCarloResult; real: boolean }) {
   const data = useMemo(
     () =>
       r.years.map((year, j) => {
-        const d = real ? r.deflators[j] : 1;
+        const p = real ? r.percentilesReal : r.percentiles;
         return {
           year,
           age: r.ages[j],
-          b90: [r.percentiles.p10[j] / d, r.percentiles.p90[j] / d] as [number, number],
-          b50: [r.percentiles.p25[j] / d, r.percentiles.p75[j] / d] as [number, number],
-          median: r.percentiles.p50[j] / d,
-          plan: r.plan[j] / d,
+          b90: [p.p10[j], p.p90[j]] as [number, number],
+          b50: [p.p25[j], p.p75[j]] as [number, number],
+          median: p.p50[j],
+          plan: r.plan[j] / (real ? r.deflators[j] : 1),
         };
       }),
     [r, real],
@@ -384,9 +396,9 @@ function niceStep(raw: number) {
 }
 
 function HistogramCard({ r, real, target }: { r: MonteCarloResult; real: boolean; target: { endWealth: number; basis: ValueBasis } | null }) {
-  const d = real ? r.deflators[r.years.length - 1] : 1;
   const { bins, planBin, targetBin } = useMemo(() => {
-    const all = Float64Array.from(r.endValues, (v) => v / d);
+    // Purchasing power: each path with its own inflation
+    const all = Float64Array.from(r.endValues, (v, i) => (real ? v / r.endDeflators[i] : v));
     // Empty depots get their own bar; the rest is spread over even steps up to the upper 10 %.
     const pos = all.filter((v) => v >= 1).sort();
     const empty = all.length - pos.length;
@@ -400,11 +412,12 @@ function HistogramCard({ r, real, target }: { r: MonteCarloResult; real: boolean
       ...counts.map((count, i) => ({ key: String(i), from: i * step, to: (i + 1) * step, over: i === n, empty: false, count, share: count / all.length })),
     ];
     const binOf = (v: number) => (v < 1 && empty ? 'empty' : String(Math.min(n, Math.floor(v / step))));
-    const planEnd = r.plan[r.plan.length - 1] / d;
-    // The wanted rest is compared in its own basis; convert it to the basis shown.
-    const t = target ? (target.basis === 'real' ? target.endWealth * r.deflators[r.years.length - 1] : target.endWealth) / d : null;
+    const planDiv = real ? r.deflators[r.years.length - 1] : 1;
+    const planEnd = r.plan[r.plan.length - 1] / planDiv;
+    // The wanted rest is compared in its own basis; shown in the other basis it is converted with the planned inflation.
+    const t = target ? (target.basis === 'real' ? target.endWealth * r.deflators[r.years.length - 1] : target.endWealth) / planDiv : null;
     return { bins: bins.filter((b) => b.count > 0 || !b.over), planBin: binOf(planEnd), targetBin: t != null ? binOf(t) : null };
-  }, [r, d, target]);
+  }, [r, real, target]);
 
   return (
     <Card>

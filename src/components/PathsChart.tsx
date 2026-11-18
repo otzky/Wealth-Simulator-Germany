@@ -70,22 +70,24 @@ export default function PathsChart({ result, real, log, byOutcome }: Props) {
 
   const { runs, years } = result;
   const Y = years.length;
+  // In purchasing power each path is converted with its own inflation; the plan with the entered one.
   const div = useMemo(() => result.deflators.map((d) => (real ? d : 1)), [result, real]);
-  const val = (r: number, j: number) => result.paths[r * Y + j] / div[j];
+  const pct = real ? result.percentilesReal : result.percentiles;
+  const val = (r: number, j: number) => result.paths[r * Y + j] / (real ? result.pathDeflators[r * Y + j] : 1);
 
   // Scales
   const scale = useMemo(() => {
     const maxima = new Float64Array(runs);
     for (let r = 0; r < runs; r++) {
       let m = 0;
-      for (let j = 0; j < Y; j++) m = Math.max(m, result.paths[r * Y + j] / div[j]);
+      for (let j = 0; j < Y; j++) m = Math.max(m, val(r, j));
       maxima[r] = m;
     }
     maxima.sort();
     const planMax = Math.max(1, ...result.plan.map((v, j) => v / div[j]));
     if (log) {
       const top = Math.max(planMax, maxima[Math.min(runs - 1, Math.floor(runs * 0.99))]);
-      const lowP10 = Math.min(...result.percentiles.p10.map((v, j) => v / div[j]).filter((v) => v > 0), top);
+      const lowP10 = Math.min(...pct.p10.filter((v) => v > 0), top);
       const yMin = 10 ** Math.floor(Math.log10(Math.max(LOG_FLOOR, lowP10 / 3)));
       const yMax = 10 ** Math.ceil(Math.log10(top));
       const ticks: number[] = [];
@@ -98,20 +100,22 @@ export default function PathsChart({ result, real, log, byOutcome }: Props) {
       return { yMin, yMax, ticks };
     }
     // Linear: the outer band (90 %) decides the height, so the bulk of the paths stays readable.
-    const top = Math.max(planMax, ...result.percentiles.p90.map((v, j) => (v / div[j]) * 1.15));
+    const top = Math.max(planMax, ...pct.p90.map((v) => v * 1.15));
     const step = niceStep(top / 5);
     const yMax = Math.ceil(top / step) * step;
     const ticks: number[] = [];
     for (let t = 0; t <= yMax + step / 2; t += step) ticks.push(t);
     return { yMin: 0, yMax, ticks };
-  }, [result, div, runs, Y, log]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result, div, pct, real, runs, Y, log]);
   const clipped = useMemo(() => {
     let n = 0;
     for (let r = 0; r < runs; r++) {
-      for (let j = 0; j < Y; j++) if (result.paths[r * Y + j] / div[j] > scale.yMax) { n++; break; }
+      for (let j = 0; j < Y; j++) if (val(r, j) > scale.yMax) { n++; break; }
     }
     return n / runs;
-  }, [result, div, runs, Y, scale]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result, real, runs, Y, scale]);
 
   const plotW = Math.max(1, width - M.l - M.r);
   const plotH = HEIGHT - M.t - M.b;
@@ -189,18 +193,19 @@ export default function PathsChart({ result, real, log, byOutcome }: Props) {
     }
     ctx.globalAlpha = 1;
 
-    const drawLine = (vals: number[], color: string, w: number, dash: number[]) => {
+    const drawLine = (vals: number[], color: string, w: number, dash: number[], d: number[] = div) => {
       ctx.strokeStyle = color;
       ctx.lineWidth = w;
       ctx.setLineDash(dash);
       ctx.beginPath();
-      vals.forEach((v, j) => (j === 0 ? ctx.moveTo(px(j), py(v / div[j])) : ctx.lineTo(px(j), py(v / div[j]))));
+      vals.forEach((v, j) => (j === 0 ? ctx.moveTo(px(j), py(v / d[j])) : ctx.lineTo(px(j), py(v / d[j]))));
       ctx.stroke();
       ctx.setLineDash([]);
     };
     // A light halo keeps the summary lines readable on top of dense paths
-    drawLine(result.percentiles.p50, c.surface, 5, []);
-    drawLine(result.percentiles.p50, c.ink, 2, []);
+    const ones = new Array(Y).fill(1);
+    drawLine(pct.p50, c.surface, 5, [], ones);
+    drawLine(pct.p50, c.ink, 2, [], ones);
     drawLine(result.plan, c.surface, 4, []);
     drawLine(result.plan, c.ink2, 1.5, [5, 4]);
     ctx.restore();
@@ -269,7 +274,8 @@ export default function PathsChart({ result, real, log, byOutcome }: Props) {
     left: hover.x + 230 > width ? hover.x - 230 : hover.x + 14,
     top: Math.min(HEIGHT - 170, Math.max(0, hover.y - 60)),
   };
-  const v = (arr: number[], j: number) => formatEuro(arr[j] / div[j]);
+  const v = (arr: number[], j: number, d: number[] = div) => formatEuro(arr[j] / d[j]);
+  const ones = new Array(Y).fill(1);
 
   return (
     <div ref={box} className="relative w-full select-none" style={{ height: HEIGHT }}>
@@ -304,9 +310,9 @@ export default function PathsChart({ result, real, log, byOutcome }: Props) {
               strong
             />
             <div className="space-y-1.5 border-t border-line pt-1.5">
-              <Row label="Gute 10 %" value={v(result.percentiles.p90, hover.j)} />
-              <Row label="Median" value={v(result.percentiles.p50, hover.j)} />
-              <Row label="Schlechte 10 %" value={v(result.percentiles.p10, hover.j)} />
+              <Row label="Gute 10 %" value={v(pct.p90, hover.j, ones)} />
+              <Row label="Median" value={v(pct.p50, hover.j, ones)} />
+              <Row label="Schlechte 10 %" value={v(pct.p10, hover.j, ones)} />
               <Row label="Plan" value={v(result.plan, hover.j)} />
             </div>
           </div>

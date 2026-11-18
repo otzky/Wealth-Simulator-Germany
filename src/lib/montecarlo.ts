@@ -1,8 +1,9 @@
 import type { SimulationConfig, SimulationResult } from '../types.js';
 import { meetsGoal } from './goal.js';
 import { gaussian, mulberry32, pathSeed } from './random.js';
+import { inflationPath } from './inflation.js';
 import { regimeModel } from './regimes.js';
-import { guardrailGuide, horizonMonths, resolveWithdrawal, simulate, usesLifeExpectancy, withdrawalActive, withFixedWithdrawal } from './simulation.js';
+import { guardrailGuide, horizonMonths, parseDate, resolveWithdrawal, simulate, usesLifeExpectancy, withdrawalActive, withFixedWithdrawal } from './simulation.js';
 
 /**
  * Monte Carlo: the same plan, simulated many times with random monthly returns.
@@ -11,8 +12,9 @@ import { guardrailGuide, horizonMonths, resolveWithdrawal, simulate, usesLifeExp
  * Their long-run growth equals the expected return entered under "Markt" (e.g. 7 % for the
  * MSCI World, which is how index returns are quoted), so the typical path follows the plan
  * line and half of all paths end above it. The volatility is the annualised monthly volatility
- * as fact sheets quote it. Everything else – inflation, dividends, costs, taxes and all events –
- * stays as in the plan.
+ * as fact sheets quote it. Inflation varies from year to year around the entered rate
+ * (inflation.ts), so inflation-adjusted withdrawals and all values in purchasing power differ
+ * between paths. Dividends, costs, taxes and all events stay as in the plan.
  */
 
 /** What counts as success: every withdrawal paid in full (plan), or more than paid in (profit). */
@@ -28,16 +30,21 @@ export interface MonteCarloResult {
   runs: number;
   years: number[];
   ages: number[];
-  deflators: number[]; // cumulative inflation at the end of each year (the same in every path)
+  deflators: number[]; // cumulative inflation at the end of each year in the plan (entered inflation)
   plan: number[]; // nominal value at the end of each year without fluctuations
   paths: Float32Array; // runs × years, nominal value at the end of each year
+  pathDeflators: Float32Array; // runs × years, cumulative inflation of each path at the end of each year
   success: Uint8Array; // 1 if the path counts as a success
   paidAll: Uint8Array; // 1 if every withdrawal (phase and events) was paid in full
   endValues: Float64Array; // nominal depot value at the end
+  endDeflators: Float64Array; // cumulative inflation of each path at the end
   depletedAge: Int16Array; // age at which the depot ran empty, -1 if never
   percentiles: Record<'p10' | 'p25' | 'p50' | 'p75' | 'p90', number[]>; // nominal, per year
+  percentilesReal: Record<'p10' | 'p25' | 'p50' | 'p75' | 'p90', number[]>; // in today's money (each path with its own inflation), per year
   metric: McMetric;
   successRate: number;
+  /** Success rate on the same paths with an expected return 1 percentage point lower */
+  successRateLowerReturn: number;
   goalRate: number | null; // share of paths that reach the goal (section "Ziel"), if one is set
   items: McItem[];
   guardrails: McGuardrails | null; // set when guardrails are on for the withdrawal phase
@@ -91,6 +98,26 @@ export function pathShocks(cfg: SimulationConfig, path: number, months: number, 
     if (next() < model.leave[s]) s = 1 - s;
   }
   return out;
+}
+
+/**
+ * Yearly inflation rates for one path (index 0 = start year), linked to the path's returns:
+ * each calendar year's log return, standardised, enters the inflation model (inflation.ts).
+ * Uses its own random numbers, so the returns of a path stay the same.
+ */
+export function pathInflation(cfg: SimulationConfig, path: number, shocks: ArrayLike<number>, months: number): Float64Array {
+  const startMonth = parseDate(cfg.startDate).m - 1;
+  const years = Math.ceil((startMonth + months) / 12);
+  const z = new Float64Array(years);
+  const counts = new Float64Array(years);
+  for (let i = 0; i < months; i++) {
+    const k = Math.floor((startMonth + i) / 12);
+    z[k] += Math.log(shocks[i]);
+    counts[k]++;
+  }
+  const vol = Math.max(0, cfg.monteCarlo.volatility) / 100;
+  for (let k = 0; k < years; k++) z[k] = vol > 0 && counts[k] ? z[k] / (vol * Math.sqrt(counts[k] / 12)) : 0;
+  return inflationPath(cfg.inflation, z, gaussian(mulberry32(pathSeed(cfg.monteCarlo.seed ^ 0x1f1a7e, path))));
 }
 
 interface Judge {
@@ -160,6 +187,8 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
   const success = new Uint8Array(runs);
   const paidAll = new Uint8Array(runs);
   const endValues = new Float64Array(runs);
+  const endDeflators = new Float64Array(runs);
+  const pathDeflators = new Float32Array(runs * years);
   const depletedAge = new Int16Array(runs).fill(-1);
   const paid = new Array(judge.items.length).fill(0);
   let successes = 0;
@@ -183,9 +212,16 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
   const gr = plan.withdrawal.guardrails;
   const guarded = gr.enabled && plan.withdrawal.mode !== 'rate' && withdrawalActive(plan);
   const unguarded: SimulationConfig = { ...plan, withdrawal: { ...plan.withdrawal, guardrails: { ...gr, enabled: false } } };
+  // The same plan with 1 percentage point less return, on exactly the same paths (sensitivity)
+  const lower: SimulationConfig = { ...plan, totalReturn: plan.totalReturn - 1 };
+  const lowerGuide = guardrailGuide({ ...cfg, totalReturn: cfg.totalReturn - 1 });
+  let successesLower = 0;
 
   for (let r = 0; r < runs; r++) {
-    const res = simulate(plan, pathShocks(cfg, r, months, shocks, model), guide);
+    pathShocks(cfg, r, months, shocks, model);
+    const infl = pathInflation(cfg, r, shocks, months);
+    const res = simulate(plan, shocks, guide, infl);
+    if (judge.ok(simulate(lower, shocks, lowerGuide, infl))) successesLower++;
     const g = res.summary.withdrawal?.guardrails;
     if (g) {
       minLevels.push(g.minLevel);
@@ -203,15 +239,17 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
       }
       if (g.raises) raisePaths++;
     }
-    if (guarded && judge.ok(simulate(unguarded, shocks))) successWithout++;
+    if (guarded && judge.ok(simulate(unguarded, shocks, undefined, infl))) successWithout++;
     let hadValue = false;
     for (let j = 0; j < years; j++) {
       const row = res.rows[j];
       paths[r * years + j] = row.valueEnd;
+      pathDeflators[r * years + j] = row.deflator;
       if (row.valueEnd > 0.5) hadValue = true;
       else if (hadValue && depletedAge[r] < 0) depletedAge[r] = row.age;
     }
     endValues[r] = res.summary.valueNominal;
+    endDeflators[r] = res.summary.deflator;
     if (!res.summary.withdrawal?.shortfall && !res.summary.missedEvents.length) paidAll[r] = 1;
     if (judge.ok(res)) {
       success[r] = 1;
@@ -228,15 +266,21 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
   }
 
   const percentiles: MonteCarloResult['percentiles'] = { p10: [], p25: [], p50: [], p75: [], p90: [] };
+  const percentilesReal: MonteCarloResult['percentiles'] = { p10: [], p25: [], p50: [], p75: [], p90: [] };
   const column = new Float64Array(runs);
+  const fill = (target: MonteCarloResult['percentiles']) => {
+    column.sort();
+    target.p10.push(quantile(column, 0.1));
+    target.p25.push(quantile(column, 0.25));
+    target.p50.push(quantile(column, 0.5));
+    target.p75.push(quantile(column, 0.75));
+    target.p90.push(quantile(column, 0.9));
+  };
   for (let j = 0; j < years; j++) {
     for (let r = 0; r < runs; r++) column[r] = paths[r * years + j];
-    column.sort();
-    percentiles.p10.push(quantile(column, 0.1));
-    percentiles.p25.push(quantile(column, 0.25));
-    percentiles.p50.push(quantile(column, 0.5));
-    percentiles.p75.push(quantile(column, 0.75));
-    percentiles.p90.push(quantile(column, 0.9));
+    fill(percentiles);
+    for (let r = 0; r < runs; r++) column[r] = paths[r * years + j] / pathDeflators[r * years + j];
+    fill(percentilesReal);
   }
 
   return {
@@ -246,13 +290,17 @@ export function runMonteCarlo(cfg: SimulationConfig, onProgress?: (share: number
     deflators: base.rows.map((x) => x.deflator),
     plan: base.rows.map((x) => x.valueEnd),
     paths,
+    pathDeflators,
     success,
     paidAll,
     endValues,
+    endDeflators,
     depletedAge,
     percentiles,
+    percentilesReal,
     metric: judge.metric,
     successRate: successes / runs,
+    successRateLowerReturn: successesLower / runs,
     goalRate: wantGoal ? goals / runs : null,
     items: judge.items.map((it, k) => ({ ...it, paidRate: paid[k] / runs })),
     guardrails: minLevels.length
@@ -306,6 +354,7 @@ export function solveSafeWithdrawal(cfg: SimulationConfig, probability: number, 
   const runs = Math.min(1000, Math.max(1, Math.round(cfg.monteCarlo.runs)));
   const months = horizonMonths(withFixedWithdrawal(cfg, 0));
   const shocks = Array.from({ length: runs }, (_, r) => pathShocks(cfg, r, months));
+  const infl = shocks.map((sh, r) => pathInflation(cfg, r, sh, months));
   const needed = Math.ceil(probability * runs);
   let evals = 0;
 
@@ -317,7 +366,7 @@ export function solveSafeWithdrawal(cfg: SimulationConfig, probability: number, 
     let ok = 0;
     let bad = 0;
     for (let r = 0; r < runs; r++) {
-      if (judge.ok(simulate(plan, shocks[r], guide))) ok++;
+      if (judge.ok(simulate(plan, shocks[r], guide, infl[r]))) ok++;
       else bad++;
       if (ok >= needed) break;
       if (bad > runs - needed) break;
@@ -333,7 +382,7 @@ export function solveSafeWithdrawal(cfg: SimulationConfig, probability: number, 
     if (!plan.withdrawal.guardrails.enabled) return null;
     const guide = guardrailGuide(cfg, x);
     const lv = new Float64Array(runs);
-    for (let r = 0; r < runs; r++) lv[r] = simulate(plan, shocks[r], guide).summary.withdrawal?.guardrails?.minLevel ?? 1;
+    for (let r = 0; r < runs; r++) lv[r] = simulate(plan, shocks[r], guide, infl[r]).summary.withdrawal?.guardrails?.minLevel ?? 1;
     return quantile(lv.sort(), 0.1);
   };
   const done = (monthlyNet: number, reachable: boolean): SafeWithdrawal => ({

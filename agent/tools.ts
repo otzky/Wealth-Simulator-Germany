@@ -199,14 +199,14 @@ export class AgentTools {
       if (args.monte_carlo) {
         const cfg = sanitize({ ...p.config, monteCarlo: { ...p.config.monteCarlo, enabled: true } });
         const mc = runMonteCarlo(cfg);
-        const div = mc.deflators[mc.deflators.length - 1];
         row.monte_carlo = {
           success_rate: pct(mc.successRate),
           success_means: mc.metric === 'plan' ? 'alle Entnahmen bezahlt (und Restvermögen erreicht)' : 'mehr als eingezahlt',
           end_value_p10: eur(mc.percentiles.p10.at(-1)!),
           end_value_p50: eur(mc.percentiles.p50.at(-1)!),
           end_value_p90: eur(mc.percentiles.p90.at(-1)!),
-          end_value_p50_real: eur(mc.percentiles.p50.at(-1)! / div),
+          end_value_p50_real: eur(mc.percentilesReal.p50.at(-1)!),
+          success_rate_if_return_1pt_lower: pct(mc.successRateLowerReturn),
         };
       }
       return row;
@@ -391,8 +391,7 @@ export function mcReport(cfg: SimulationConfig, plan: SimulationResult, r: Monte
 
   let breakdown: Record<string, unknown> | undefined;
   if (target && target.endWealth > 0) {
-    const d = target.basis === 'real' ? r.deflators[Y - 1] : 1;
-    const ends = Float64Array.from(r.endValues, (v) => v / d);
+    const ends = Float64Array.from(r.endValues, (v, i) => (target.basis === 'real' ? v / r.endDeflators[i] : v));
     const c = { reached: 0, near: 0, below: 0, failed: 0 };
     ends.forEach((v, i) => {
       if (!r.paidAll[i]) c.failed++;
@@ -420,10 +419,13 @@ export function mcReport(cfg: SimulationConfig, plan: SimulationResult, r: Monte
       volatility: r.volatility,
       runs: r.runs,
       seed: cfg.monteCarlo.seed,
-      note: 'Im Durchschnitt (geometrisch) wachsen die Verläufe mit expected_return; der Median liegt etwas darüber. Inflation, Kosten, Steuern und Ereignisse wie im Plan.',
+      inflation: `schwankt um ${cfg.inflation} % (AR(1), deutsche Inflation 1970–2025, an schwache Börsenjahre gekoppelt)`,
+      note: 'Im Durchschnitt (geometrisch) wachsen die Verläufe mit expected_return; der Median liegt etwas darüber. Kosten, Steuern und Ereignisse wie im Plan; Kaufkraft-Werte je Verlauf mit dessen eigener Inflation.',
     },
     success: {
       rate: pct(r.successRate),
+      rate_if_return_1pt_lower: pct(r.successRateLowerReturn),
+      sensitivity_note: 'Dieselben Verläufe mit 1 Prozentpunkt weniger erwarteter Rendite. Die erwartete Rendite ist selbst nur auf etwa ±2 Prozentpunkte bekannt – die Erfolgsquote daher als Orientierung nennen, nicht als genaue Wahrscheinlichkeit.',
       means:
         r.metric === 'plan'
           ? `Anteil der Verläufe, in denen jede Entnahme voll bezahlt wird${target ? ' und das Restvermögen übrig bleibt' : ''}`
@@ -451,9 +453,9 @@ export function mcReport(cfg: SimulationConfig, plan: SimulationResult, r: Monte
       : null,
     value_percentiles: idx.map(pick),
     end_value_real: {
-      p10: eur(r.percentiles.p10[Y - 1] / r.deflators[Y - 1]),
-      p50: eur(r.percentiles.p50[Y - 1] / r.deflators[Y - 1]),
-      p90: eur(r.percentiles.p90[Y - 1] / r.deflators[Y - 1]),
+      p10: eur(r.percentilesReal.p10[Y - 1]),
+      p50: eur(r.percentilesReal.p50[Y - 1]),
+      p90: eur(r.percentilesReal.p90[Y - 1]),
     },
   };
 }
