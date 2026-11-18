@@ -1,10 +1,11 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, FileImage, FileSpreadsheet, FileText, Link2, Monitor, Moon, RotateCcw, Share2, SlidersHorizontal, Sun } from 'lucide-react';
+import { Check, ChevronDown, FileImage, FileSpreadsheet, FileText, Link2, Monitor, Moon, Share2, SlidersHorizontal, Sun } from 'lucide-react';
 import type { SimulationConfig, ValueBasis } from './types';
 import { defaultConfig } from './defaults';
 import { resolveWithdrawal, runSimulation } from './lib/simulation';
 import { evaluateGoal } from './lib/goal';
-import { clearShareHash, loadInitialConfig, saveConfig, shareUrl } from './lib/storage';
+import { clearShareHash, deleteAllScenarios, loadScenarios, makeScenario, saveScenarios, shareUrl, uniqueName, type ScenarioStore } from './lib/storage';
+import ScenarioMenu from './components/ScenarioMenu';
 import { downloadCsv, exportElement } from './lib/export';
 import { formatEuro, formatPercent } from './lib/format';
 import SettingsPanel from './components/SettingsPanel';
@@ -39,7 +40,10 @@ function useTheme() {
 }
 
 export default function App() {
-  const [config, setConfig] = useState<SimulationConfig>(loadInitialConfig);
+  // Scenarios live only in this browser; the active one is saved automatically on every change.
+  const [initial] = useState(loadScenarios);
+  const [store, setStore] = useState<ScenarioStore>(initial);
+  const [config, setConfig] = useState<SimulationConfig>(() => initial.items.find((i) => i.id === initial.activeId)!.config);
   const [basis, setBasis] = useState<ValueBasis>('nominal');
   const [theme, setTheme] = useTheme();
   const [toast, setToast] = useState<string | null>(null);
@@ -47,7 +51,56 @@ export default function App() {
   const reportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => clearShareHash(), []);
-  useEffect(() => saveConfig(config), [config]);
+  useEffect(() => {
+    setStore((st) => {
+      const cur = st.items.find((i) => i.id === st.activeId);
+      if (!cur || cur.config === config) return st;
+      return { ...st, items: st.items.map((i) => (i.id === st.activeId ? { ...i, config, updatedAt: Date.now() } : i)) };
+    });
+  }, [config]);
+  useEffect(() => saveScenarios(store), [store]);
+  const activeScenario = store.items.find((i) => i.id === store.activeId) ?? store.items[0];
+
+  const switchScenario = (id: string) => {
+    const s = store.items.find((i) => i.id === id);
+    if (!s || id === store.activeId) return;
+    setStore((st) => ({ ...st, activeId: id }));
+    setConfig(s.config);
+  };
+  const createScenario = (kind: 'blank' | 'copy') => {
+    const s = makeScenario(
+      uniqueName(store.items, kind === 'copy' ? `${activeScenario.name} (Kopie)` : 'Neues Szenario'),
+      kind === 'copy' ? config : defaultConfig(),
+    );
+    setStore((st) => ({ activeId: s.id, items: [...st.items, s] }));
+    setConfig(s.config);
+    setToast(kind === 'copy' ? `Kopie „${s.name}“ angelegt.` : `„${s.name}“ angelegt – mit Standardwerten.`);
+  };
+  const renameScenario = (id: string, name: string) =>
+    setStore((st) => ({ ...st, items: st.items.map((i) => (i.id === id ? { ...i, name: uniqueName(st.items.filter((x) => x.id !== id), name) } : i)) }));
+  const deleteScenario = (id: string) => {
+    const rest = store.items.filter((i) => i.id !== id);
+    const removed = store.items.find((i) => i.id === id);
+    if (!rest.length) {
+      const fresh = makeScenario('Mein Plan', defaultConfig());
+      setStore({ activeId: fresh.id, items: [fresh] });
+      setConfig(fresh.config);
+    } else if (id === store.activeId) {
+      const next = [...rest].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      setStore({ activeId: next.id, items: rest });
+      setConfig(next.config);
+    } else {
+      setStore((st) => ({ ...st, items: st.items.filter((i) => i.id !== id) }));
+    }
+    setToast(`„${removed?.name}“ gelöscht.`);
+  };
+  const deleteAll = () => {
+    deleteAllScenarios();
+    const fresh = makeScenario('Mein Plan', defaultConfig());
+    setStore({ activeId: fresh.id, items: [fresh] });
+    setConfig(fresh.config);
+    setToast('Alle Szenarien wurden aus diesem Browser gelöscht.');
+  };
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 2400);
@@ -100,7 +153,7 @@ export default function App() {
 
   const reset = () => {
     setConfig(defaultConfig());
-    setToast('Auf Standardwerte zurückgesetzt.');
+    setToast(`„${activeScenario.name}“ auf Standardwerte zurückgesetzt.`);
   };
 
   const eventCount = config.savingsSteps.length + config.lumpSums.length + config.oneOffWithdrawals.length + config.withdrawalPhases.length;
@@ -148,17 +201,23 @@ export default function App() {
         <div className="mx-auto flex h-16 max-w-[1440px] items-center gap-3 px-4 sm:px-6">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <Logo />
-            <div className="min-w-0">
+            <div className="hidden min-w-0 md:block">
               <h1 className="truncate text-[15px] font-semibold tracking-tight text-ink">Vermögens-Simulator</h1>
-              <p className="hidden truncate text-xs text-muted sm:block">Sparplan, Dividenden & deutsche Steuern</p>
+              <p className="hidden truncate text-xs text-muted lg:block">Sparplan, Dividenden & deutsche Steuern</p>
             </div>
+            <span className="hidden h-7 w-px bg-line md:block" aria-hidden />
+            <ScenarioMenu
+              items={store.items}
+              activeId={activeScenario.id}
+              onSwitch={switchScenario}
+              onCreate={createScenario}
+              onRename={renameScenario}
+              onDelete={deleteScenario}
+              onDeleteAll={deleteAll}
+              onReset={reset}
+            />
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="hidden md:block">
-              <Button variant="ghost" onClick={reset}>
-                <RotateCcw size={15} /> Zurücksetzen
-              </Button>
-            </div>
             <div className="hidden sm:block">
               <Button variant="secondary" onClick={share}>
                 <Share2 size={15} /> Teilen
@@ -192,7 +251,7 @@ export default function App() {
                 <span className="flex items-center gap-2 text-[14px] font-semibold text-ink">
                   <SlidersHorizontal size={16} /> Einstellungen
                 </span>
-                <span className="text-xs text-muted">Automatisch gespeichert</span>
+                <span className="truncate pl-3 text-xs text-muted">Automatisch gespeichert</span>
               </div>
               <div className={cx('scroll-thin border-t border-line lg:block lg:max-h-[calc(100vh-10rem)] lg:overflow-y-auto lg:border-t-0', !mobileSettings && 'hidden')}>
                 <SettingsPanel config={config} onChange={patch} />
@@ -223,7 +282,8 @@ export default function App() {
                 },
               ]}
             />
-            <div className="flex flex-wrap gap-1.5">
+            {/* Assumptions: not on screen (the settings show them), but in PDF and image exports */}
+            <div className="export-only flex-wrap gap-1.5">
               {assumptions.map((a) => (
                 <span key={a} className="tnum rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-ink-2">
                   {a}

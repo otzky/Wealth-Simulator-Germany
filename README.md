@@ -18,7 +18,10 @@ Interaktiver Rechner für den langfristigen Vermögensaufbau mit ETFs – inklus
 - **Zielrechner**: benötigte Sparrate, Startkapital oder Rendite für ein Zielvermögen und/oder eine Netto-Dividende pro Monat
 - **Auswertung**: nominal oder in heutiger Kaufkraft, Charts, Bilanz mit fiktivem Verkauf, Jahrestabelle
 - **Teilen & Export**: Link mit allen Einstellungen, PDF, PNG und CSV
-- Einstellungen werden automatisch lokal gespeichert, helles und dunkles Design
+- **Szenarien**: mehrere Sätze von Eingaben unter eigenem Namen, z. B. für sich, die Partnerin oder ein Kind. Jede Änderung wird automatisch im aktiven Szenario gespeichert; über das Menü in der Kopfzeile wechselt man zwischen ihnen, legt neue an (mit Standardwerten oder als Kopie), benennt sie um oder löscht sie – einzeln oder alle auf einmal, etwa bevor jemand anderes den Rechner nutzt. Gespeichert wird nur im Browser (localStorage), nicht auf einem Server; ein anderer Browser oder ein anderes Gerät sieht die Szenarien nicht. Ein geöffneter Teilen-Link wird als neues Szenario angelegt und überschreibt keines der eigenen.
+- **Aufbau der Ergebnisse**: oben der Depotwert mit Eingezahlt, Ausgezahlt und Ertrag, darunter direkt die Vermögensentwicklung, dann Entnahmephase, Einkommen, Bilanz (mit Dividenden, Kosten und Steuern) und die Jahresübersicht. Jede Zahl steht nur einmal. Die getroffenen Annahmen erscheinen nicht auf dem Bildschirm (dort stehen sie in den Einstellungen), aber im PDF- und Bild-Export.
+- **Einstellungen**: Erklärungen stehen hinter den ⓘ-Symbolen; Seltenes (Startdatum, Bandbreite im Chart) unter „Erweitert“. Zurücksetzen auf Standardwerte gibt es im Szenario-Menü.
+- Helles und dunkles Design
 
 ## So wird gerechnet
 
@@ -30,10 +33,10 @@ Die Simulation läuft monatlich mit konstanten Annahmen. Ein paar Regeln, die ma
   - *Einmalige Entnahmen* sind Netto-Beträge: So viel kommt auf dem Konto an. Verkauft wird entsprechend mehr, weil der Gewinn der verkauften Anteile versteuert wird.
   - *Befristete Entnahmen* laufen von Januar des ersten bis Dezember des letzten Jahres, als Netto-Betrag pro Monat in Euro des Startjahres, optional jährlich an die Inflation angepasst. Die Sparrate läuft währenddessen weiter. Mehrere Zeiträume dürfen sich überschneiden und addieren sich – auch mit der Entnahmephase.
   - Reicht das Depot für eine Entnahme nicht, wird ausgezahlt, was vorhanden ist, und die Auswertung zeigt einen Hinweis mit dem fehlenden Betrag.
-- **Entnahmephase** (Abschnitt „Entnahme“): die dauerhafte Entnahme ab einem Jahr bis zum Ende der Simulation – als fester Netto-Betrag, als Entnahmerate oder berechnet aus Lebenserwartung und gewünschtem Restvermögen. Die Kennzahlen der Karte „Entnahmephase“ beziehen sich nur auf diese Phase; „Ausgezahlt“ und die Bilanz enthalten alle Entnahmen.
+- **Entnahmephase** (Abschnitt „Entnahme“): die dauerhafte Entnahme ab einem Jahr bis zum Ende der Simulation – als fester Netto-Betrag, als Entnahmerate oder berechnet aus Lebenserwartung und gewünschtem Restvermögen. Die Kennzahlen der Karte „Entnahmephase“ beziehen sich nur auf diese Phase; „Ausgezahlt“ oben und die Bilanz enthalten alle Entnahmen.
 - **Steuer bei Verkäufen (FIFO)**: Das Depot wird in Monats-Tranchen geführt. Bei jedem Verkauf gelten die ältesten Anteile als zuerst verkauft, wie bei deutschen Depotbanken. Versteuert wird der Gewinn genau dieser Anteile, nach Teilfreistellung und restlichem Sparerpauschbetrag. Weil alte Anteile meist den höchsten Gewinn tragen, fällt zu Beginn einer Entnahme mehr Steuer an als später. Verluste einzelner Tranchen werden innerhalb eines Verkaufs verrechnet; ein Verlustvortrag wird nicht geführt.
 - **Vorabpauschale**: erhöht die Anschaffungskosten aller Anteile, damit sie beim Verkauf nicht doppelt besteuert wird. Die Steuer darauf wird anteilig aus dem Depot entnommen.
-- **Monte Carlo** (Schalter unter „Markt“, Ergebnisse im Tab „Monte Carlo“; der Plan bleibt unverändert)
+- **Monte Carlo** (im Tab „Monte Carlo“ einschalten; Volatilität und Anzahl der Verläufe stehen oben im Tab; der Plan bleibt unverändert)
   - *Renditen – Regime-Modell*: Der Markt wechselt zufällig zwischen einem ruhigen Regime und einem Krisen-Regime (Regime-Switching-Lognormal-Modell mit zwei Regimes nach Hardy 2001). In jedem Monat wird die Rendite aus der Verteilung des aktuellen Regimes gezogen, danach wechselt das Regime mit fester Wahrscheinlichkeit. Geschätzt per Maximum Likelihood auf den MSCI World Net Total Return in Euro, 12/1969–08/2026 (680 Monatsrenditen; Parameter in `src/lib/regimes.ts`, Skripte zum Nachrechnen in `tools/regime-fit/`):
 
     | | Ruhig | Krise |
@@ -44,7 +47,7 @@ Die Simulation läuft monatlich mit konstanten Annahmen. Ein paar Regeln, die ma
     | Anteil der Zeit | 75 % | 25 % |
 
     In 1.500 simulierten Geschichten gleicher Länge erzeugt das Modell das schlechteste Jahr, den größten Rückgang, die längste Zeit unter dem alten Höchststand, die Schwankung der Kalenderjahre, die Schiefe der Monatsrenditen und die Spannweite der 10- und 20-Jahres-Renditen des Index realistisch – ein einfaches lognormales Modell nicht (es kennt z. B. praktisch keine Jahre unter −25 %, der Index hatte fünf). Über 30 Jahre streut das Modell etwas breiter als die Geschichte, ist dort also eher vorsichtig. Ein drittes Regime (etwa „seitwärts“) ist in den Daten nicht erkennbar; lange Seitwärtsphasen entstehen aus dem Wechsel von Krisen und Erholungen. Zum Vergleich: Hardy fand für den S&P 500 1956–1999 ein kürzeres, aber heftigeres Krisen-Regime.
-  - *Rendite und Volatilität*: Die Form des Modells (Wechsel, relative Lage und Schwankung der Regimes) bleibt fest, Niveau und Stärke kommen aus den Eingaben unter „Markt“. Im Durchschnitt (geometrisch) wachsen die Verläufe mit der eingetragenen Gesamtrendite – so, wie Index-Renditen über die Geschichte berechnet werden (MSCI World etwa 7–8 % p. a.). Weil Krisen große Verluste wahrscheinlicher machen als große Gewinne, liegt der Median etwas über der Plan-Linie. Die Volatilität ist die aus Monatsrenditen hochgerechnete Schwankung, wie Factsheets sie angeben (MSCI World etwa 15 %); ganze Kalenderjahre schwanken im Modell dann wie beim Index stärker (rund 19 %). Ausschüttungsquote, Kosten, Steuern und Ereignisse bleiben wie im Plan.
+  - *Rendite und Volatilität*: Die Form des Modells (Wechsel, relative Lage und Schwankung der Regimes) bleibt fest, Das Niveau kommt aus der Gesamtrendite unter „Markt“, die Stärke aus der Volatilität im Tab. Im Durchschnitt (geometrisch) wachsen die Verläufe mit der eingetragenen Gesamtrendite – so, wie Index-Renditen über die Geschichte berechnet werden (MSCI World etwa 7–8 % p. a.). Weil Krisen große Verluste wahrscheinlicher machen als große Gewinne, liegt der Median etwas über der Plan-Linie. Die Volatilität ist die aus Monatsrenditen hochgerechnete Schwankung, wie Factsheets sie angeben (MSCI World etwa 15 %); ganze Kalenderjahre schwanken im Modell dann wie beim Index stärker (rund 19 %). Ausschüttungsquote, Kosten, Steuern und Ereignisse bleiben wie im Plan.
   - *Inflation*: schwankt von Jahr zu Jahr um die eingetragene Rate (AR(1)-Prozess). Eine Überraschung klingt nur langsam ab, Phasen hoher Inflation halten daher wie in den 1970ern oder 2021–2023 einige Jahre an. Überraschungen fallen eher in schwache Börsenjahre (Stagflation). Inflationsangepasste Entnahmen steigen jeden Januar um die tatsächliche Inflation der Vorjahre, und „Kaufkraft heute“ rechnet jeden Verlauf mit seiner eigenen Inflation um. Geschätzt auf dem deutschen Verbraucherpreisindex (Destatis, Jahresdurchschnitte 1970–2025, bis 1991 Westdeutschland), die Kopplung an Aktien auf denselben MSCI-World-Daten wie die Regimes (`tools/inflation-fit/`):
 
     | Größe | Wert |
@@ -209,7 +212,8 @@ src/
   lib/mc.worker.ts    Web Worker für Monte Carlo
   lib/random.ts       Zufallszahlen mit Startwert
   lib/config.ts       Prüfen und Ergänzen von Konfigurationen
-  lib/storage.ts      Speichern im Browser, Teilen-Links
+  lib/storage.ts      Szenarien im Browser, Teilen-Links
+  components/ScenarioMenu.tsx  Szenarien wechseln, anlegen, umbenennen, löschen
   lib/export.ts       PDF/PNG/CSV
   components/         Oberfläche (Einstellungen, Ergebnisse, Charts, Monte-Carlo-Tab)
 agent/

@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Dices, Loader2, ShieldCheck, Sparkles } from 'lucide-react';
+import { Dices, Loader2, Power, ShieldCheck, Sparkles } from 'lucide-react';
 import type { SimulationConfig, SimulationResult, ValueBasis } from '../types';
 import type { MonteCarloResult } from '../lib/montecarlo';
 import { canSolveSafeWithdrawal, quantile } from '../lib/montecarlo';
 import { safeKey, type McState, type SafeState } from '../lib/useMonteCarlo';
 import { formatAxis, formatEuro, formatEuroCompact, formatNumber, formatPercent } from '../lib/format';
-import { Button, Card, CardHeader, Hint, NumberField, Segmented, Switch, cx } from './ui';
+import { Button, Card, CardHeader, Hint, IconButton, NumberField, NumberInput, Segmented, Switch, cx } from './ui';
 import { LegendItem } from './Charts';
 import PathsChart from './PathsChart';
 
@@ -51,7 +51,7 @@ function Intro({ onEnable }: { onEnable: () => void }) {
             vor oder nach Entnahmebeginn macht die Reihenfolge einen großen Unterschied. Die Monte-Carlo-Simulation spielt deinen
             Plan mit allen Ereignissen tausendfach mit zufälligen Renditen durch und zeigt, wie oft er aufgeht.
           </p>
-          <p className="mt-2 text-[13px] text-muted">Der Plan selbst bleibt unverändert. Volatilität und Anzahl der Verläufe stellst du unter „Markt“ ein.</p>
+          <p className="mt-2 text-[13px] text-muted">Der Plan selbst bleibt unverändert. Volatilität und Anzahl der Verläufe stellst du danach hier im Tab ein.</p>
         </div>
         <div>
           <Button variant="primary" onClick={onEnable}>
@@ -89,11 +89,45 @@ function Report({ config, plan, mc, r, safe, basis, onBasisChange, onChange }: O
       {/* Headline */}
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3 sm:px-6">
-          <p className="flex items-center gap-2 text-[13px] text-ink-2">
-            <span className="tnum font-medium text-ink">{formatNumber(r.runs)} Verläufe</span> · Volatilität {formatPercent(r.volatility)} p. a.
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px] text-ink-2">
+            <span className="flex items-center gap-1.5">
+              Volatilität
+              <Hint>
+                Die Schwankung, wie Factsheets sie angeben (aus Monatsrenditen aufs Jahr hochgerechnet). Der MSCI World liegt historisch bei etwa
+                15 %, Mischfonds deutlich darunter. Weil sich Krisen im Modell wie in der Realität über Monate hinziehen, schwanken ganze
+                Kalenderjahre stärker – beim MSCI World um rund 19 %.
+              </Hint>
+              <NumberInput
+                aria-label="Volatilität in Prozent pro Jahr"
+                size="sm"
+                className="w-[4.75rem]"
+                value={config.monteCarlo.volatility}
+                onChange={(v) => v != null && onChange({ monteCarlo: { ...config.monteCarlo, volatility: Math.min(100, Math.max(0, v)) } })}
+                min={0}
+                max={100}
+                suffix="%"
+              />
+            </span>
+            <span className="flex items-center gap-1.5">
+              Verläufe
+              <Hint>Mehr Verläufe machen die Wahrscheinlichkeiten genauer (bei 1.000 etwa ± 1,5 Prozentpunkte, bei 5.000 etwa ± 0,7), rechnen aber länger.</Hint>
+              <Segmented
+                aria-label="Anzahl Verläufe"
+                size="sm"
+                value={String(config.monteCarlo.runs) as '1000' | '5000'}
+                onChange={(v) => onChange({ monteCarlo: { ...config.monteCarlo, runs: Number(v) as 1000 | 5000 } })}
+                options={[
+                  { value: '1000', label: '1.000' },
+                  { value: '5000', label: '5.000' },
+                ]}
+              />
+            </span>
             {mc.running && <Loader2 size={14} className="animate-spin text-accent" aria-label="Wird neu berechnet" />}
-          </p>
+          </div>
           <div className="flex items-center gap-2">
+            <IconButton label="Monte Carlo ausschalten" onClick={() => onChange({ monteCarlo: { ...config.monteCarlo, enabled: false } })}>
+              <Power size={15} />
+            </IconButton>
             <Button size="sm" variant="ghost" onClick={reroll}>
               <Dices size={14} /> Neu würfeln
             </Button>

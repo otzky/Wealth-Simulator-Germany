@@ -78,13 +78,20 @@ export async function exportElement(el: HTMLElement, type: 'png' | 'pdf') {
   const { toPng } = await import('html-to-image');
   const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#ffffff';
   const width = Math.max(el.scrollWidth, 1100);
-  const dataUrl = await toPng(el, {
-    pixelRatio: 2,
-    backgroundColor: bg,
-    width,
-    style: { width: `${width}px`, padding: '24px', boxSizing: 'border-box' },
-    filter: (node) => !(node instanceof HTMLElement && node.dataset.exportIgnore !== undefined),
-  });
+  // Show parts meant only for exports (e.g. the assumptions) while the picture is taken
+  el.classList.add('exporting');
+  let dataUrl: string;
+  try {
+    dataUrl = await toPng(el, {
+      pixelRatio: 2,
+      backgroundColor: bg,
+      width,
+      style: { width: `${width}px`, padding: '24px', boxSizing: 'border-box' },
+      filter: (node) => !(node instanceof HTMLElement && node.dataset.exportIgnore !== undefined),
+    });
+  } finally {
+    el.classList.remove('exporting');
+  }
 
   if (type === 'png') {
     const blob = await (await fetch(dataUrl)).blob();

@@ -73,7 +73,6 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
   const value = real ? s.valueReal : s.valueNominal;
   const invested = real ? s.investedReal : s.invested;
   const afterSale = real ? s.valueAfterSaleReal : s.valueAfterSale;
-  const monthlyDiv = real ? s.finalMonthlyDividendNetReal : s.finalMonthlyDividendNet;
   // All sales that were paid out: withdrawal phase, temporary and one-off withdrawals
   const withdrawnNet = real ? s.withdrawnNetReal : s.withdrawnNet;
   const oneOffNet = real ? s.oneOffNetReal : s.oneOffNet;
@@ -85,8 +84,6 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
   ].filter((e) => rows.some((r) => r.year === e.year));
   const divPaidOut = real ? s.dividendsPaidOutReal : s.dividendsPaidOut;
   const paidOut = withdrawnNet + divPaidOut; // everything that reached your account
-  // Total value created: what is left plus what was paid out, relative to what was paid in
-  const multiple = invested > 0 ? (value + paidOut) / invested : 0;
   const hasDividends = config.dividendYield > 0;
   const hasPayouts = paidOut > 0.5;
   const hasFreed = rows.some((r) => r.freedSavings > 0);
@@ -116,7 +113,7 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
             ]}
           />
         </div>
-        <div className="grid gap-6 px-5 py-6 sm:px-6 lg:grid-cols-[1.3fr_1fr] lg:items-end">
+        <div className="grid gap-6 px-5 py-6 sm:px-6 lg:grid-cols-[1fr_auto] lg:items-end">
           <div>
             <p className="text-[13px] font-medium text-muted">{real ? 'Depotwert in heutiger Kaufkraft' : 'Depotwert am Ende'}</p>
             <p className="mt-1 text-[40px] leading-none font-semibold tracking-tight text-ink sm:text-[52px]">{formatEuro(value)}</p>
@@ -127,7 +124,7 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
               )}
             </p>
           </div>
-          <dl className={cx('grid gap-3', hasPayouts ? 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-2' : 'grid-cols-3')}>
+          <dl className={cx('grid gap-3', hasPayouts ? 'grid-cols-3' : 'grid-cols-2')}>
             <MiniStat label="Eingezahlt" value={formatEuroCompact(invested)} swatch="var(--series-2)" />
             {hasPayouts ? (
               <MiniStat
@@ -143,14 +140,12 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
               value={formatEuroCompact(value + paidOut - invested)}
               swatch="var(--series-1)"
             />
-            <MiniStat label="Faktor" value={`${formatNumber(Math.round(multiple * 10) / 10)}×`} />
           </dl>
         </div>
       </Card>
 
       {goal && <GoalCard goal={goal} config={config} />}
 
-      {ws && <WithdrawalCard config={config} result={result} real={real} />}
       {config.withdrawal.enabled && !ws && (
         <Card className="flex items-start gap-3 px-5 py-4 text-[13px] text-ink-2 sm:px-6">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-critical" />
@@ -171,39 +166,6 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
         </Card>
       )}
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Kpi
-          label="Netto-Dividende / Monat"
-          hint="Durchschnitt der letzten 12 Monate, nach Steuern."
-          value={formatEuro(monthlyDiv)}
-          sub={hasDividends ? 'am Ende der Laufzeit' : 'keine Ausschüttung'}
-        />
-        <Kpi
-          label="Dividenden gesamt"
-          value={formatEuroCompact(real ? s.dividendsNetReal : s.dividendsNet)}
-          sub={
-            !anyPaid
-              ? 'netto, reinvestiert'
-              : !anyReinvested
-                ? 'netto, ausgezahlt'
-                : `netto · ${formatEuroCompact(divPaidOut)} ausgezahlt`
-          }
-        />
-        <Kpi
-          label="Steuern laufend"
-          hint={`Auf Ausschüttungen, Vorabpauschale${hasSales ? ' und Entnahmen' : ''} gezahlte Steuern während der Laufzeit (nominal).`}
-          value={formatEuroCompact(s.taxesPaid)}
-          sub={`+ ${formatEuroCompact(s.saleTax)} bei Verkauf`}
-        />
-        <Kpi
-          label="Kosten gesamt"
-          hint="Kaufgebühren und laufende Fondskosten (TER) über die gesamte Laufzeit (nominal)."
-          value={formatEuroCompact(s.costsPaid)}
-          sub={invested > 0 ? `${formatPercent((s.costsPaid / s.invested) * 100)} der Einzahlungen` : '—'}
-        />
-      </div>
-
       {/* Wealth chart */}
       <Card>
         <CardHeader
@@ -220,6 +182,8 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
           <WealthChart data={wealthData} target={wealthTarget} spread={config.returnSpread} withdrawalStart={withdrawalStart} events={events} />
         </div>
       </Card>
+
+      {ws && <WithdrawalCard config={config} result={result} real={real} />}
 
       <div className="grid gap-5 2xl:grid-cols-[1.4fr_1fr]">
         {/* Income chart: dividends (reinvested/paid out), withdrawals and freed savings, stacked */}
@@ -264,7 +228,7 @@ export default function Results({ config, result, low, high, goal, basis, onBasi
           ) : null}
         </Card>
 
-        <BalanceSheet result={result} />
+        <BalanceSheet result={result} hasDividends={hasDividends} />
       </div>
 
       <YearTable config={config} result={result} real={real} />
@@ -288,27 +252,14 @@ function formatYears(months: number) {
 
 function MiniStat({ label, value, swatch, hint }: { label: string; value: string; swatch?: string; hint?: string }) {
   return (
-    <div className="rounded-xl bg-surface-2 px-3 py-2.5">
-      <dt className="flex items-center gap-1.5 text-xs text-muted">
+    <div className="rounded-xl bg-surface-2 px-3 py-2.5 lg:min-w-[8.5rem]">
+      <dt className="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted">
         {swatch && <span className="size-2 rounded-sm" style={{ background: swatch }} />}
         {label}
         {hint && <Hint>{hint}</Hint>}
       </dt>
       <dd className="mt-1 text-[15px] font-semibold text-ink">{value}</dd>
     </div>
-  );
-}
-
-function Kpi({ label, value, sub, hint }: { label: string; value: string; sub?: string; hint?: string }) {
-  return (
-    <Card className="px-4 py-4">
-      <p className="flex items-center gap-1.5 text-[13px] text-muted">
-        {label}
-        {hint && <Hint>{hint}</Hint>}
-      </p>
-      <p className="mt-1.5 text-[22px] leading-tight font-semibold tracking-tight text-ink">{value}</p>
-      {sub && <p className="mt-1 text-xs text-muted">{sub}</p>}
-    </Card>
   );
 }
 
@@ -379,16 +330,13 @@ function WithdrawalCard({ config, result, real }: { config: SimulationConfig; re
   // In 'target' mode the depot is meant to run down to the wanted rest, so an empty depot at the very end is fine.
   const depleted = ws.depletedYear != null && !ws.target?.reachable;
   const bad = ws.target ? !ws.target.reachable : depleted;
-  const lastsYears = depleted ? ws.depletedYear! - ws.startYear + 1 : null;
   const startValue = real ? ws.startValueReal : ws.startValue;
-  const endValue = real ? s.valueReal : s.valueNominal;
   // First-year averages, converted to today's money with the deflator at the start
   const k = real && ws.startValue > 0 ? ws.startValueReal / ws.startValue : 1;
   const fyNet = ws.firstYearMonthlyNet * k;
   const fyDiv = ws.firstYearMonthlyDividends * k;
   const fyFreed = ws.firstYearMonthlyFreed * k;
   const fyPayout = fyNet + fyDiv;
-  const paidTotal = (real ? ws.netReal : ws.net) + (real ? s.dividendsPaidOutReal : s.dividendsPaidOut);
 
   return (
     <Card className="overflow-hidden">
@@ -428,7 +376,7 @@ function WithdrawalCard({ config, result, real }: { config: SimulationConfig; re
               : `Reicht bis ${s.endYear} (Alter ${s.endAge})`}
         </span>
       </div>
-      <dl className="grid grid-cols-2 gap-3 px-5 py-5 sm:px-6 xl:grid-cols-4">
+      <dl className="grid grid-cols-1 gap-3 px-5 py-5 sm:grid-cols-3 sm:px-6">
         <Stat label="Depotwert bei Beginn" value={formatEuroCompact(startValue)} sub={real ? 'in heutiger Kaufkraft' : 'nominal'} />
         <Stat
           label="Auszahlung pro Monat"
@@ -446,12 +394,6 @@ function WithdrawalCard({ config, result, real }: { config: SimulationConfig; re
           hint="Brutto-Verkäufe im ersten Entnahmejahr im Verhältnis zum Depotwert bei Beginn. Rund 3–4 % gelten historisch als langfristig tragfähig."
           value={`${formatPercent(ws.effectiveRate)} p. a.`}
           sub="vom Startwert, vor Steuern"
-        />
-        <Stat
-          label={depleted ? `Ausgezahlt in ${lastsYears} Jahren` : 'Ausgezahlt gesamt'}
-          hint="Netto-Entnahmen plus ausgezahlte Dividenden über die gesamte Laufzeit."
-          value={formatEuroCompact(paidTotal)}
-          sub={depleted ? `netto · ${formatEuroCompact(ws.taxes)} Steuern` : `netto · Restwert ${formatEuroCompact(endValue)}`}
         />
       </dl>
     </Card>
@@ -488,7 +430,7 @@ function Progress({ label, value, target }: { label: string; value: number; targ
   );
 }
 
-function BalanceSheet({ result }: { result: SimulationResult }) {
+function BalanceSheet({ result, hasDividends }: { result: SimulationResult; hasDividends: boolean }) {
   const s = result.summary;
   const sold = s.withdrawnGross > 0.5;
   type Line = { label: string; value: number; kind: 'start' | 'plus' | 'minus' | 'sum'; hint?: string };
@@ -512,8 +454,14 @@ function BalanceSheet({ result }: { result: SimulationResult }) {
           { label: 'Steuern auf Entnahmen', value: s.withdrawalTaxes },
         ]
       : []),
-    { label: 'Kosten (Gebühren + TER)', value: s.costsPaid },
-    { label: 'Steuern laufend', value: s.taxesPaid },
+    ...(hasDividends
+      ? [
+          { label: 'Dividenden netto gesamt', value: s.dividendsNet },
+          { label: 'Netto-Dividende pro Monat am Ende', value: s.finalMonthlyDividendNet, hint: 'Durchschnitt der letzten 12 Monate, nach Steuern.' },
+        ]
+      : []),
+    { label: 'Kosten (Gebühren + TER)', value: s.costsPaid, hint: 'Kaufgebühren und laufende Fondskosten (TER) über die gesamte Laufzeit.' },
+    { label: 'Steuern laufend', value: s.taxesPaid, hint: `Auf Ausschüttungen, Vorabpauschale${sold ? ' und Entnahmen' : ''} gezahlte Steuern während der Laufzeit.` },
     { label: 'Kaufkraftverlust durch Inflation', value: s.valueAfterSale - s.valueAfterSaleReal },
   ];
   return (
@@ -543,9 +491,12 @@ function BalanceSheet({ result }: { result: SimulationResult }) {
         </dl>
         <div className="mt-3 space-y-1.5 rounded-xl bg-surface-2 px-4 py-3 text-[13px]">
           <p className="text-xs font-medium text-muted">Zum Vergleich</p>
-          {info.map((l) => (
+          {info.map((l: { label: string; value: number; hint?: string }) => (
             <div key={l.label} className="flex justify-between gap-3 text-ink-2">
-              <span>{l.label}</span>
+              <span className="flex items-center gap-1.5">
+                {l.label}
+                {l.hint && <Hint>{l.hint}</Hint>}
+              </span>
               <span className="tnum">{formatEuro(l.value)}</span>
             </div>
           ))}

@@ -355,17 +355,23 @@ export function Switch({
   onChange,
   label,
   description,
+  hint,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: ReactNode;
   description?: ReactNode;
+  /** Longer explanation behind an info icon next to the label */
+  hint?: ReactNode;
 }) {
   const id = useId();
   return (
     <div className="flex items-start justify-between gap-4">
       <label htmlFor={id} className="cursor-pointer">
-        <span className="block text-[13px] font-medium text-ink-2">{label}</span>
+        <span className="flex items-center gap-1.5 text-[13px] font-medium text-ink-2">
+          {label}
+          {hint && <Hint>{hint}</Hint>}
+        </span>
         {description && <span className="mt-0.5 block text-xs leading-snug text-muted">{description}</span>}
       </label>
       <button

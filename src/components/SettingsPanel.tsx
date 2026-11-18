@@ -1,5 +1,5 @@
-import { useId, useMemo } from 'react';
-import { CalendarClock, Coins, HandCoins, Landmark, Milestone, Plus, Receipt, Target, Trash2, TrendingUp } from 'lucide-react';
+import { useId, useMemo, useState } from 'react';
+import { CalendarClock, ChevronDown, Coins, HandCoins, Landmark, Milestone, Plus, Receipt, Target, Trash2, TrendingUp } from 'lucide-react';
 import type { LumpSum, OneOffWithdrawal, SavingsStep, SimulationConfig, WithdrawalPhase } from '../types';
 import { PARTIAL_EXEMPTION, effectiveTaxRate, parseDate, reinvestsIn, simulationYears, solveWithdrawal, usesLifeExpectancy } from '../lib/simulation';
 import { formatEuro, formatNumber, formatPercent } from '../lib/format';
@@ -20,7 +20,6 @@ export default function SettingsPanel({ config, onChange }: Props) {
 
   const ids = { birth: useId(), start: useId() };
   const taxRate = effectiveTaxRate(config);
-  const setMc = (patch: Partial<SimulationConfig['monteCarlo']>) => onChange({ monteCarlo: { ...config.monteCarlo, ...patch } });
   const setGoal = (patch: Partial<SimulationConfig['goal']>) => onChange({ goal: { ...config.goal, ...patch } });
 
   const updateStep = (id: string, patch: Partial<SavingsStep>) =>
@@ -48,14 +47,9 @@ export default function SettingsPanel({ config, onChange }: Props) {
         title="Zeitraum"
         summary={`${durationSummary} · ab ${years[0]?.year ?? ''}`}
       >
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Geburtsdatum" htmlFor={ids.birth}>
-            <TextInput id={ids.birth} type="date" value={config.birthDate} onChange={(e) => e.target.value && onChange({ birthDate: e.target.value })} />
-          </Field>
-          <Field label="Start" htmlFor={ids.start}>
-            <TextInput id={ids.start} type="date" value={config.startDate} onChange={(e) => e.target.value && onChange({ startDate: e.target.value })} />
-          </Field>
-        </div>
+        <Field label="Geburtsdatum" htmlFor={ids.birth}>
+          <TextInput id={ids.birth} type="date" value={config.birthDate} onChange={(e) => e.target.value && onChange({ birthDate: e.target.value })} />
+        </Field>
         {!byLifeExpectancy && (
           <Segmented
             aria-label="Laufzeit festlegen"
@@ -76,6 +70,11 @@ export default function SettingsPanel({ config, onChange }: Props) {
         ) : (
           <SliderField label="Zielalter" value={config.targetAge} onChange={(v) => onChange({ targetAge: Math.round(v) })} min={20} max={100} step={1} suffix="J." />
         )}
+        <Advanced>
+          <Field label="Start der Simulation" htmlFor={ids.start} hint="Normalerweise heute. Ein anderes Datum ist nützlich, um einen Plan ab einem späteren Zeitpunkt durchzurechnen.">
+            <TextInput id={ids.start} type="date" value={config.startDate} onChange={(e) => e.target.value && onChange({ startDate: e.target.value })} />
+          </Field>
+        </Advanced>
       </Section>
 
       <Section
@@ -113,9 +112,8 @@ export default function SettingsPanel({ config, onChange }: Props) {
         title="Ereignisse"
         summary={eventCount ? `${eventCount} geplant` : 'Keine geplant'}
       >
-        <p className="text-xs leading-snug text-muted">
-          Alles, was vom gleichmäßigen Sparplan abweicht: mehr oder weniger sparen, Geld einzahlen oder herausnehmen. Einmalige Beträge gelten jeweils im Januar des Jahres.
-        </p>
+        <p className="text-xs leading-snug text-muted">Alles, was vom gleichmäßigen Sparplan abweicht. Beträge gelten jeweils ab Januar.</p>
+        <div className="divide-y divide-line rounded-xl border border-line px-3">
         <ListBlock
           title="Sparrate ändern"
           hint="Ab dem gewählten Jahr gilt die neue monatliche Rate (die jährliche Erhöhung startet von dort neu)."
@@ -214,6 +212,7 @@ export default function SettingsPanel({ config, onChange }: Props) {
             </div>
           ))}
         </ListBlock>
+        </div>
       </Section>
 
       <WithdrawalSection config={config} onChange={onChange} yearOptions={yearOptions} />
@@ -221,7 +220,7 @@ export default function SettingsPanel({ config, onChange }: Props) {
       <Section
         icon={<TrendingUp size={16} />}
         title="Markt"
-        summary={`${formatPercent(config.totalReturn)} Rendite · ${formatPercent(config.inflation)} Inflation${config.monteCarlo.enabled ? ' · Monte Carlo' : ''}`}
+        summary={`${formatPercent(config.totalReturn)} Rendite · ${formatPercent(config.inflation)} Inflation`}
       >
         <SliderField
           label="Gesamtrendite p. a."
@@ -287,52 +286,19 @@ export default function SettingsPanel({ config, onChange }: Props) {
           inputMin={-5}
           inputMax={30}
         />
-        <SliderField
-          label="Bandbreite im Chart"
-          hint="Zeigt zusätzlich ein pessimistisches und ein optimistisches Szenario mit Rendite minus/plus diesem Wert."
-          value={config.returnSpread}
-          onChange={(v) => onChange({ returnSpread: v })}
-          min={0}
-          max={5}
-          step={0.5}
-          suffix="± %"
-          inputMax={10}
-        />
-        <div className="space-y-3 rounded-xl border border-line p-3">
-          <Switch
-            label="Schwankungen simulieren (Monte Carlo)"
-            description="Spielt den Plan tausendfach mit zufälligen Renditen durch und zeigt im Tab „Monte Carlo“, wie oft er aufgeht. Der Plan selbst bleibt unverändert."
-            checked={config.monteCarlo.enabled}
-            onChange={(v) => setMc({ enabled: v })}
+        <Advanced>
+          <SliderField
+            label="Bandbreite im Chart"
+            hint="Zeigt im Chart zusätzlich ein pessimistisches und ein optimistisches Szenario mit Rendite minus/plus diesem Wert. Wie stark die Märkte wirklich schwanken, zeigt der Tab „Monte Carlo“."
+            value={config.returnSpread}
+            onChange={(v) => onChange({ returnSpread: v })}
+            min={0}
+            max={5}
+            step={0.5}
+            suffix="± %"
+            inputMax={10}
           />
-          {config.monteCarlo.enabled && (
-            <>
-              <SliderField
-                label="Volatilität p. a."
-                hint="Die Schwankung, wie Factsheets sie angeben (aus Monatsrenditen aufs Jahr hochgerechnet). Der MSCI World liegt historisch bei etwa 15 %, Mischfonds deutlich darunter. Weil sich Krisen im Modell wie in der Realität über Monate hinziehen, schwanken ganze Kalenderjahre stärker – beim MSCI World um rund 19 %."
-                value={config.monteCarlo.volatility}
-                onChange={(v) => setMc({ volatility: v })}
-                min={0}
-                max={30}
-                step={0.5}
-                suffix="%"
-                inputMax={100}
-              />
-              <Field label="Anzahl Verläufe" hint="Mehr Verläufe machen die Wahrscheinlichkeiten genauer (bei 1.000 etwa ± 1,5 Prozentpunkte, bei 5.000 etwa ± 0,7), rechnen aber länger.">
-                <Segmented
-                  aria-label="Anzahl Verläufe"
-                  size="sm"
-                  value={String(config.monteCarlo.runs) as '1000' | '5000'}
-                  onChange={(v) => setMc({ runs: Number(v) })}
-                  options={[
-                    { value: '1000', label: '1.000' },
-                    { value: '5000', label: '5.000 (genauer)' },
-                  ]}
-                />
-              </Field>
-            </>
-          )}
-        </div>
+        </Advanced>
       </Section>
 
       <Section
@@ -421,7 +387,7 @@ export default function SettingsPanel({ config, onChange }: Props) {
         <div className="space-y-3 rounded-xl border border-line p-3">
           <Switch
             label="Vorabpauschale berücksichtigen"
-            description="Jährliche Pauschalbesteuerung, wenn ein Fonds weniger ausschüttet als der Basisertrag (Basiszins × 70 %)."
+            hint="Jährliche Pauschalbesteuerung, wenn ein Fonds weniger ausschüttet als der Basisertrag (Basiszins × 70 %)."
             checked={config.applyAdvanceLumpSum}
             onChange={(v) => onChange({ applyAdvanceLumpSum: v })}
           />
@@ -442,7 +408,7 @@ export default function SettingsPanel({ config, onChange }: Props) {
       <Section icon={<Target size={16} />} title="Ziel" summary={config.goal.enabled ? 'Aktiv' : 'Aus'} defaultOpen={false}>
         <Switch
           label="Zielrechner aktivieren"
-          description="Berechnet, was du brauchst, um dein Wunschvermögen oder deine Wunschdividende zu erreichen."
+          hint="Berechnet, was du brauchst, um dein Wunschvermögen oder deine Wunschdividende zu erreichen."
           checked={config.goal.enabled}
           onChange={(v) => setGoal({ enabled: v })}
         />
@@ -536,7 +502,7 @@ function WithdrawalSection({
     <Section icon={<HandCoins size={16} />} title="Entnahme" summary={summary} defaultOpen={w.enabled}>
       <Switch
         label="Entnahmephase planen"
-        description="Ab einem bestimmten Jahr dauerhaft Geld aus dem Depot entnehmen, z. B. als Zusatzrente. Einmalige und befristete Entnahmen findest du unter „Ereignisse“."
+        hint="Ab einem bestimmten Jahr dauerhaft Geld aus dem Depot entnehmen, z. B. als Zusatzrente. Einmalige und befristete Entnahmen findest du unter „Ereignisse“."
         checked={w.enabled}
         onChange={enable}
       />
@@ -644,7 +610,7 @@ function WithdrawalSection({
           )}
           {config.dividendYield > 0 && <Switch
             label="Dividenden ab Beginn auszahlen"
-            description={
+            hint={
               config.dividendStrategy === 'fromYear'
                 ? `Aktuell: Auszahlung ab ${config.dividendPayoutYear} (siehe „Markt“).`
                 : 'Statt zu reinvestieren, fließen die Netto-Dividenden ab Entnahmebeginn auf dein Konto.'
@@ -655,7 +621,7 @@ function WithdrawalSection({
           {amountMode && paysOutAtStart && (
             <Switch
               label="Dividenden auf den Betrag anrechnen"
-              description={
+              hint={
                 w.countDividends
                   ? 'Es wird nur verkauft, was die Dividenden nicht abdecken. Das schont das Depot.'
                   : 'Der Betrag wird zusätzlich zu den Dividenden verkauft.'
@@ -666,7 +632,7 @@ function WithdrawalSection({
           )}
           <Switch
             label="Jährlich an Inflation anpassen"
-            description="Der Betrag steigt jedes Jahr mit der Inflationsrate, damit die Kaufkraft erhalten bleibt."
+            hint="Der Betrag steigt jedes Jahr mit der Inflationsrate, damit die Kaufkraft erhalten bleibt."
             checked={w.inflationAdjust}
             onChange={(v) => setW({ inflationAdjust: v })}
           />
@@ -677,7 +643,7 @@ function WithdrawalSection({
           )}
           <Switch
             label="Sparrate ab Beginn stoppen"
-            description="Keine monatlichen Einzahlungen mehr während der Entnahme. Einmalzahlungen bleiben bestehen."
+            hint="Keine monatlichen Einzahlungen mehr während der Entnahme. Einmalzahlungen bleiben bestehen."
             checked={w.stopContributions}
             onChange={(v) => setW({ stopContributions: v })}
           />
@@ -708,9 +674,9 @@ function withValue(options: { value: number; label: string }[], year: number) {
   return [{ value: year, label: `${year} (außerhalb)` }, ...options];
 }
 
-function ListBlock({ title, hint, empty, onAdd, children }: { title: string; hint: string; empty: string; onAdd: () => void; children: React.ReactNode[] }) {
+function ListBlock({ title, hint, onAdd, children }: { title: string; hint: string; empty?: string; onAdd: () => void; children: React.ReactNode[] }) {
   return (
-    <div className="space-y-2 rounded-xl border border-line p-3">
+    <div className="space-y-2 py-2.5">
       <Field
         label={title}
         hint={hint}
@@ -718,14 +684,37 @@ function ListBlock({ title, hint, empty, onAdd, children }: { title: string; hin
           <button
             type="button"
             onClick={onAdd}
+            aria-label={`${title}: hinzufügen`}
             className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent"
           >
             <Plus size={14} /> Hinzufügen
           </button>
         }
       >
-        {children.length ? <div className="space-y-2">{children}</div> : <p className="text-xs text-muted">{empty}</p>}
+        {children.length > 0 && <div className="space-y-2 pb-0.5">{children}</div>}
       </Field>
+    </div>
+  );
+}
+
+/** Rarely needed settings, folded away until asked for. */
+function Advanced({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1 text-xs font-medium text-muted transition-colors hover:text-ink"
+      >
+        Erweitert <ChevronDown size={13} className={cx('transition-transform', open && 'rotate-180')} />
+      </button>
+      <div id={id} hidden={!open} className="mt-3 space-y-4">
+        {children}
+      </div>
     </div>
   );
 }
