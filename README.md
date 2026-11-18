@@ -1,4 +1,4 @@
-# Vermögens-Simulator
+# Vermögens-Simulator - Germany
 
 Interaktiver Rechner für den langfristigen Vermögensaufbau mit ETFs – inklusive Dividenden, Inflation und deutscher Abgeltungsteuer. Läuft komplett im Browser, ohne Server und ohne Tracking.
 
