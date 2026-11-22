@@ -1,6 +1,8 @@
 # Vermögens-Simulator - Germany
 
-Interaktiver Rechner für den langfristigen Vermögensaufbau mit ETFs – inklusive Dividenden, Inflation und deutscher Abgeltungsteuer. Läuft komplett im Browser, ohne Server und ohne Tracking.
+Interaktiver Rechner für den langfristigen Vermögensaufbau mit ETFs – inklusive Dividenden, Inflation und deutscher Abgeltungsteuer. Dazu ein zweiter Rechner **Kaufen oder Mieten** (siehe unten). Läuft komplett im Browser, ohne Server und ohne Tracking.
+
+Zwischen den Rechnern wechselt man über den Titel in der Kopfzeile. Jeder Rechner hat seine eigene Adresse (`/` und `/kaufen-mieten`), eigene Szenarien und eigene Teilen-Links.
 
 ## Funktionen
 
@@ -72,6 +74,47 @@ Die Simulation läuft monatlich mit konstanten Annahmen. Ein paar Regeln, die ma
   - *Grenzen*: Die Parameter stammen aus gut 56 Jahren eines Index und der deutschen Inflation; eine langfristige Rückkehr zum Mittel ist nicht abgebildet, die erwartete Rendite gilt in allen Verläufen als bekannt. Die Ergebnisse hängen stark von Rendite und Volatilität ab.
 - **Nicht abgebildet**: schwankende Inflation im Plan (nur in Monte Carlo), Crashs als einzelnes Ereignis, andere Einkünfte (Rente, bAV), Günstigerprüfung, Änderungen der Steuergesetze.
 
+## Kaufen oder Mieten
+
+Vergleicht den Kauf einer selbst genutzten Immobilie mit Mieten plus Geldanlage. Die Frage dahinter: Wer hat nach X Jahren mehr Vermögen?
+
+**Funktionen**
+
+- Eingaben in Gruppen: Immobilie (Kaufpreis, Wertsteigerung), Kaufnebenkosten (Bundesland, Notar und Grundbuch, Makler), Finanzierung (Eigenkapital, Sollzins, Tilgung, Zinsbindung, Anschlusszins), Instandhaltung, Miete (Kaltmiete, Mietsteigerung), Geldanlage (Rendite, Ausschüttung, Kosten, Fondsart, Kirchensteuer, Sparerpauschbetrag; standardmäßig eingeklappt) sowie Kaufjahr, Zeitraum, Verkaufskosten und Inflation
+- Antwort oben: wer nach dem Zeitraum vorn liegt, um wie viel, und ab welchem Jahr Kaufen dauerhaft vorn liegt (Break-even); daneben das Vermögen beider Wege
+- **Vermögen im Vergleich** als Linien je Jahr, mit Markierungen für Break-even, Ende der Zinsbindung und Abbezahlt
+- **Monatliche Ausgaben** je Jahr als zwei gestapelte Balken: Kaufen (Zinsen, Tilgung, Instandhaltung, Angelegt) und Mieten (Miete, Angelegt)
+- **Kipppunkte**: für Wertsteigerung, Rendite der Anlage, Anschlusszins, Sollzins, Kaltmiete, Mietsteigerung, Kaufpreis und Instandhaltung der Wert, ab dem sich die Antwort dreht (jeweils nur dieser Wert geändert). Werte nah am Kipppunkt sind hervorgehoben. Dazu der Kaufpreis in Jahreskaltmieten und der Faktor, bis zu dem sich Kaufen im eigenen Fall lohnt.
+- **Bilanz** beider Wege (nominal) und eine aufklappbare Jahresübersicht
+- Nominal oder in heutiger Kaufkraft, Szenarien im Browser, Teilen-Link (`/kaufen-mieten#k=…`), Export als PDF, PNG und CSV, wie im Vermögens-Simulator
+
+**So wird gerechnet**
+
+- *Gleiche Ausgaben*: Beide Wege geben jeden Monat gleich viel aus. Wer weniger fürs Wohnen zahlt, legt die Differenz in einem ETF an – anfangs meist der Mieter (Rate plus Instandhaltung liegen über der Miete), nach der Tilgung der Eigentümer. Der Mieter legt außerdem das Eigenkapital zu Beginn an. Ohne diese Regel würde Kaufen mit einer Zwangssparquote gegen einen Mieter verglichen, der die Differenz ausgibt.
+- *Geldanlage*: derselbe Rechenkern wie im Vermögens-Simulator (monatlich, mit Teilfreistellung, Vorabpauschale, Sparerpauschbetrag, Kirchensteuer, Verkauf nach FIFO). Bewertet wird jeweils nach Steuern bei einem Verkauf.
+- *Kaufnebenkosten*: Grunderwerbsteuer nach Bundesland, Notar und Grundbuch, Makler-Käuferanteil. Sie werden aus dem Eigenkapital bezahlt; nur der Rest mindert den Kredit. Reicht das Eigenkapital nicht, werden sie mitfinanziert (mit Warnung).
+- *Kredit*: Annuitätendarlehen, monatlich mit Sollzins/12; Rate = Kredit × (Zins + anfängliche Tilgung) / 12. Nach der Zinsbindung gilt der Anschlusszins bei gleicher Rate, die Laufzeit passt sich an. Deckt die Rate dann nicht mehr Zins plus 1 % Tilgung, steigt sie auf diesen Wert.
+- *Instandhaltung*: Prozent vom Kaufpreis pro Jahr, mit der Inflation fortgeschrieben. Hausgeld-Anteile, Grundsteuer und Versicherungen sind nicht getrennt abgebildet; wer sie berücksichtigen will, erhöht die Instandhaltung entsprechend (beim Mieter stecken sie in den Nebenkosten, die beide Wege ähnlich zahlen).
+- *Miete*: Kaltmiete mit jährlicher Steigerung. Die warmen Nebenkosten zahlen beide Wege, sie fallen heraus.
+- *Immobilie*: Wert = Kaufpreis × (1 + Wertsteigerung)^Jahre. Verglichen wird, als ob am Ende verkauft würde: Wert minus Verkaufskosten minus Restschuld plus Depot. Ein Verkauf der selbst genutzten Immobilie ist nach deutschem Recht steuerfrei.
+- *Kipppunkte*: Für jeden Hebel wird ein Raster abgesucht und die Grenze per Bisektion auf wenige Nachkommastellen bestimmt (jeweils nur dieser Wert geändert). „In jedem realistischen Fall“ heißt: im geprüften Bereich dreht sich nichts.
+- *Kaufkraft*: Teilt durch die angenommene Inflation; Zahlungen in Charts und Tabelle bleiben nominal.
+
+**Standardwerte und Quellen** (Stand November 2026)
+
+| Wert | Standard | Hintergrund |
+|---|---|---|
+| Grunderwerbsteuer | nach Bundesland | BW 5,0 · BY 3,5 · BE 6,0 · BB 6,5 · HB 5,5 (seit 1.7.2025) · HH 5,5 · HE 6,0 · MV 6,0 · NI 5,0 · NW 6,5 · RP 5,0 · SL 6,5 · SN 5,5 (seit 1.1.2023) · ST 5,0 · SH 6,5 · TH 5,0 % |
+| Notar und Grundbuch | 2 % | üblich 1,5–2 % des Kaufpreises |
+| Makler | 3,57 % | Käuferanteil bei hälftiger Teilung (seit 2020), 3 % + MwSt. |
+| Sollzins | 4 % | 10 Jahre Zinsbindung lagen im Herbst 2026 bei etwa 4,3–4,5 % |
+| Instandhaltung | 1 % vom Kaufpreis | Faustregeln 0,8–1 % des Kaufpreises bzw. 1–1,5 % des Gebäudewerts; die II. Berechnungsverordnung nennt 7,10–11,50 €/m² je nach Alter. Ältere Häuser eher mehr, Neubau und Wohnungen (Teil über das Hausgeld) eher weniger. |
+| Mietsteigerung | 1,5 % | Index der Nettokaltmieten (Destatis) 1995–2024: etwa 1,4 % p. a. |
+| Wertsteigerung | 2 % | langfristig etwa in Höhe der Inflation; Häuserpreisindex Q1 2026: +1,4 % zum Vorjahr |
+| Verkaufskosten | 3,57 % | Makleranteil beim Verkauf |
+
+**Grenzen**: konstante Annahmen ohne Schwankungen (kein Monte Carlo), keine Förderungen (KfW, Wohn-Riester), keine Sondertilgungen, keine Mietausfälle oder Leerstände, keine Steuervorteile einer Vermietung, kein Umzug im Zeitraum. Nicht in Euro messbar und deshalb nur als Hinweis genannt: Sicherheit vor einer Eigenbedarfskündigung, Freiheit beim Umbauen, Flexibilität für einen Umzug und der eigene Aufwand für Verwaltung und Reparaturen.
+
 ## Schnittstelle für KI (MCP-Server und Kommandozeile)
 
 Damit eine KI (z. B. Claude Desktop) mit dem Simulator rechnen kann, statt Zahlen zu schätzen, gibt es einen lokalen MCP-Server. Er nutzt denselben Rechenkern wie die App, läuft komplett auf dem eigenen Rechner und sendet keine Daten nach außen.
@@ -138,6 +181,7 @@ Ohne gespeicherten Plan wird jede Rechnung neu aufgesetzt (siehe unten). Wer sei
 | `monte_carlo` | Erfolgsquote, Perzentile, bezahlte Entnahmen, Leitplanken-Statistik; optional sichere Entnahme (`safe_probability`) |
 | `solve` | Gesuchten Wert berechnen: Entnahme für ein Restvermögen, sichere Entnahme oder nötige Sparrate/Startkapital/Rendite für ein Ziel |
 | `compare` | Bis zu 8 Szenarien nebeneinander, optional mit Monte Carlo auf denselben Zufallsverläufen |
+| `buy_vs_rent` | Kaufen oder Mieten: Gewinner, Vermögen beider Wege, Break-even, Rate, Kaufnebenkosten, Kipppunkte; mit `scenarios` bis zu 8 Varianten. Startet bei Standardwerten oder einem Teilen-Link (`link`), Felder unter `buy_vs_rent_fields` in `describe`; `totalReturn` u. a. dürfen direkt in `changes` stehen. Fehlen Kaufpreis, Miete, Eigenkapital oder Zins, nennt `notes` die angenommenen Werte. |
 | `plans` | Pläne auflisten, lesen, speichern, löschen, Standard setzen, Teilen-Link importieren |
 
 Die Ressource `wealth-sim://model` beschreibt das Modell als Markdown.
@@ -216,7 +260,11 @@ src/
   components/ScenarioMenu.tsx  Szenarien wechseln, anlegen, umbenennen, löschen
   lib/export.ts       PDF/PNG/CSV
   components/         Oberfläche (Einstellungen, Ergebnisse, Charts, Monte-Carlo-Tab)
+  buyrent/            Kaufen oder Mieten: Rechenkern (engine.ts), Standardwerte und Bundesländer,
+                      Prüfung, Szenarien und Links, Oberfläche (BuyRentApp, Settings, Results)
+  components/Chrome.tsx  Kopfzeile: Logo, Rechner-Wechsel, Export-Menü, Design, Hinweis
 agent/
+  buyrent.ts          Werkzeug buy_vs_rent mit Feldbeschreibung
   tools.ts            Werkzeuge der KI-Schnittstelle (gemeinsam für MCP und Kommandozeile)
   scenario.ts         Ausgangspunkt + Änderungen, Prüfung, Hinweise, Unterschiede
   fields.ts           Beschreibung aller Felder

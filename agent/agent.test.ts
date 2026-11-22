@@ -188,4 +188,32 @@ describe('hosted without storage', () => {
     expect(t.simulate({ base: `link:${a.app_link}` }).end.value).toBe(a.end.value);
     expect(() => t.simulate({ base: 'link:https://x.example/#s=kaputt' })).toThrow(InputError);
   });
+
+  it('compares buying and renting, with tipping points and a link back to the app', () => {
+    const t = fresh();
+    const a = t.buyVsRent({ changes: { price: 350000, rent: 1300, equity: 80000, interest: 3.5, totalReturn: 6, state: 'NW' } }) as Record<string, any>;
+    expect(a.notes).toEqual([]);
+    expect(a.purchase_costs.transfer_tax_rate).toBe(6.5);
+    expect(a.config.invest.totalReturn).toBe(6);
+    expect(a.tipping_points.length).toBeGreaterThan(4);
+    expect(a.app_link).toMatch(/^http:\/\/app\/kaufen-mieten#k=/);
+    const b = t.buyVsRent({ link: a.app_link }) as Record<string, any>;
+    expect(b.wealth_buy).toBe(a.wealth_buy);
+    expect(b.wealth_rent).toBe(a.wealth_rent);
+  });
+
+  it('names assumed values, corrected values and unknown fields', () => {
+    const t = fresh();
+    const r = t.buyVsRent({ changes: { price: 300000, repayment: 99 }, tipping_points: false }) as Record<string, any>;
+    expect(r.notes.join(' ')).toMatch(/rent = 1200/);
+    expect(r.notes.join(' ')).toMatch(/repayment: 99 ist nicht möglich/);
+    expect(r.tipping_points).toBeUndefined();
+    expect(() => t.buyVsRent({ changes: { kaufpreis: 1 } })).toThrow(/Unbekannte Felder/);
+  });
+
+  it('runs buy-vs-rent scenarios side by side', () => {
+    const r = fresh().buyVsRent({ changes: { price: 400000, rent: 1200, equity: 100000, interest: 4 }, scenarios: [{ name: 'Basis' }, { name: 'Hohe Miete', changes: { rent: 2000 } }] }) as Record<string, any>;
+    expect(r.scenarios).toHaveLength(2);
+    expect(r.scenarios[1].wealth_rent).toBeLessThan(r.scenarios[0].wealth_rent);
+  });
 });

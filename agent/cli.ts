@@ -12,6 +12,7 @@ const HELP = `Vermögens-Simulator – Kommandozeile und MCP-Server
   wealth-sim monte_carlo [JSON]          { base?, changes?, runs?, volatility?, seed?, safe_probability? }
   wealth-sim solve       JSON            { target, base?, changes?, probability?, variable? }
   wealth-sim compare     JSON            { scenarios: [{ name, base?, changes? }], monte_carlo? }
+  wealth-sim buy_vs_rent [JSON]          { link?, changes?, scenarios?, detail?, tipping_points? }
   wealth-sim plans       JSON            { action, name?, link?, base?, changes?, make_default? }
   wealth-sim import "<Teilen-Link>" [Name]
 
@@ -43,6 +44,7 @@ async function run(argv: string[]) {
     : cmd === 'monte_carlo' ? t.monteCarlo(a)
     : cmd === 'solve' ? t.solve(a)
     : cmd === 'compare' ? t.compare(a)
+    : cmd === 'buy_vs_rent' ? t.buyVsRent(a)
     : cmd === 'plans' ? t.plans(a)
     : cmd === 'import' ? t.plans({ action: 'import_link', link: arg, name: extra })
     : null;

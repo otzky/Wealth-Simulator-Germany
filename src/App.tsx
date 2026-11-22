@@ -1,11 +1,12 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, FileImage, FileSpreadsheet, FileText, Link2, Monitor, Moon, Share2, SlidersHorizontal, Sun } from 'lucide-react';
+import { Check, ChevronDown, Link2, Share2, SlidersHorizontal } from 'lucide-react';
 import type { SimulationConfig, ValueBasis } from './types';
 import { defaultConfig } from './defaults';
 import { resolveWithdrawal, runSimulation } from './lib/simulation';
 import { evaluateGoal } from './lib/goal';
 import { clearShareHash, deleteAllScenarios, loadScenarios, makeScenario, saveScenarios, shareUrl, uniqueName, type ScenarioStore } from './lib/storage';
 import ScenarioMenu from './components/ScenarioMenu';
+import { ExportMenu, Logo, ModuleSwitcher, ThemeToggle, useTheme, type ModuleId } from './components/Chrome';
 import { downloadCsv, exportElement } from './lib/export';
 import { formatEuro, formatPercent } from './lib/format';
 import SettingsPanel from './components/SettingsPanel';
@@ -14,32 +15,7 @@ import MonteCarloView from './components/MonteCarlo';
 import { useMonteCarlo, useSafeWithdrawal } from './lib/useMonteCarlo';
 import { Button, Card, IconButton, Segmented, cx } from './components/ui';
 
-type Theme = 'system' | 'light' | 'dark';
-
-function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => {
-    try {
-      const t = localStorage.getItem('vs-theme');
-      return t === 'light' || t === 'dark' ? t : 'system';
-    } catch {
-      return 'system';
-    }
-  });
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'system') delete root.dataset.theme;
-    else root.dataset.theme = theme;
-    try {
-      if (theme === 'system') localStorage.removeItem('vs-theme');
-      else localStorage.setItem('vs-theme', theme);
-    } catch {
-      /* ignore */
-    }
-  }, [theme]);
-  return [theme, setTheme] as const;
-}
-
-export default function App() {
+export default function App({ onSwitchModule }: { onSwitchModule: (id: ModuleId) => void }) {
   // Scenarios live only in this browser; the active one is saved automatically on every change.
   const [initial] = useState(loadScenarios);
   const [store, setStore] = useState<ScenarioStore>(initial);
@@ -202,8 +178,7 @@ export default function App() {
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <Logo />
             <div className="hidden min-w-0 md:block">
-              <h1 className="truncate text-[15px] font-semibold tracking-tight text-ink">Vermögens-Simulator</h1>
-              <p className="hidden truncate text-xs text-muted lg:block">Sparplan, Dividenden & deutsche Steuern</p>
+              <ModuleSwitcher current="wealth" onSwitch={onSwitchModule} />
             </div>
             <span className="hidden h-7 w-px bg-line md:block" aria-hidden />
             <ScenarioMenu
@@ -229,6 +204,9 @@ export default function App() {
             <ExportMenu onExport={doExport} />
             <ThemeToggle theme={theme} onChange={setTheme} />
           </div>
+        </div>
+        <div className="border-t border-line px-4 py-1.5 md:hidden">
+          <ModuleSwitcher current="wealth" onSwitch={onSwitchModule} />
         </div>
       </header>
 
@@ -322,74 +300,5 @@ export default function App() {
         )}
       </div>
     </div>
-  );
-}
-
-function Logo() {
-  return (
-    <svg viewBox="0 0 32 32" className="size-9 shrink-0" aria-hidden>
-      <rect width="32" height="32" rx="9" fill="var(--accent)" />
-      <path d="M7 22l6-6 4 4 8-9" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="25" cy="11" r="2" fill="#fff" />
-    </svg>
-  );
-}
-
-function ExportMenu({ onExport }: { onExport: (t: 'png' | 'pdf' | 'csv') => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', esc);
-    return () => {
-      document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', esc);
-    };
-  }, [open]);
-
-  const items = [
-    { type: 'pdf' as const, icon: <FileText size={16} />, label: 'PDF-Bericht' },
-    { type: 'png' as const, icon: <FileImage size={16} />, label: 'Bild (PNG)' },
-    { type: 'csv' as const, icon: <FileSpreadsheet size={16} />, label: 'Tabelle (CSV)' },
-  ];
-
-  return (
-    <div ref={ref} className="relative">
-      <Button variant="primary" onClick={() => setOpen((o) => !o)} aria-haspopup aria-expanded={open}>
-        Export <ChevronDown size={14} className={cx('transition-transform', open && 'rotate-180')} />
-      </Button>
-      {open && (
-        <div role="menu" className="absolute right-0 z-30 mt-2 w-48 overflow-hidden rounded-xl border border-line bg-surface p-1 shadow-card">
-          {items.map((i) => (
-            <button
-              key={i.type}
-              role="menuitem"
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onExport(i.type);
-              }}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
-            >
-              <span className="text-muted">{i.icon}</span>
-              {i.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {
-  const next: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
-  const label: Record<Theme, string> = { system: 'Design: System', light: 'Design: Hell', dark: 'Design: Dunkel' };
-  return (
-    <IconButton label={`${label[theme]} (wechseln)`} onClick={() => onChange(next[theme])}>
-      {theme === 'system' ? <Monitor size={17} /> : theme === 'light' ? <Sun size={17} /> : <Moon size={17} />}
-    </IconButton>
   );
 }

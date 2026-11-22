@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy, FolderOpen, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react';
-import type { Scenario } from '../lib/storage';
 import { cx } from './ui';
 
+/** What the menu needs of a scenario; the inputs themselves stay with the module. */
+export interface ScenarioItem {
+  id: string;
+  name: string;
+  updatedAt: number;
+}
+
 interface Props {
-  items: Scenario[];
+  items: ScenarioItem[];
   activeId: string;
   onSwitch: (id: string) => void;
   onCreate: (kind: 'blank' | 'copy') => void;
@@ -41,7 +47,7 @@ export default function ScenarioMenu({ items, activeId, onSwitch, onCreate, onRe
     };
   }, [open, editing]);
 
-  const startRename = (s: Scenario) => {
+  const startRename = (s: ScenarioItem) => {
     setConfirm(null);
     setEditing(s.id);
     setDraft(s.name);

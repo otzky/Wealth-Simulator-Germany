@@ -3,6 +3,7 @@ import { canSolveSafeWithdrawal, quantile, runMonteCarlo, solveSafeWithdrawal, t
 import { runSimulation, solveWithdrawal, withdrawalActive } from '../src/lib/simulation.js';
 import { sanitize } from '../src/lib/config.js';
 import type { GoalVariable, SimulationConfig, SimulationResult, YearRow } from '../src/types.js';
+import { BUY_RENT_FIELDS, buyVsRent, type BuyVsRentArgs } from './buyrent.js';
 import { fieldDocs } from './fields.js';
 import { MODEL_NOTES } from './model.js';
 import { InputError, merge, prepare, ResultCache, type PlanStore, type Prepared } from './scenario.js';
@@ -53,10 +54,17 @@ export class AgentTools {
         'Jede Antwort nennt unter "changed" die wirksamen Abweichungen vom Ausgangspunkt und unter "notes" angenommene oder korrigierte Werte – bitte der Person mitteilen.',
         'Beträge in Euro, Renditen in % p. a.; Ereignisse und Entnahmen beziehen sich auf Kalenderjahre (jeweils ab Januar). Die Laufzeit steuern durationMode/durationYears/targetAge.',
         'app_link öffnet das Szenario im Simulator; plans save speichert ein Ergebnis dauerhaft.',
+        'Kaufen oder Mieten ist ein eigener Rechner: Werkzeug buy_vs_rent, Felder unter buy_vs_rent_fields. Er startet immer bei Standardwerten (oder einem Teilen-Link …/kaufen-mieten#k=…) und hat keine gespeicherten Pläne.',
       ],
       fields: fieldDocs(),
       model: MODEL_NOTES,
+      buy_vs_rent_fields: BUY_RENT_FIELDS,
     };
+  }
+
+  // ---------------------------------------------------------------- buy_vs_rent
+  buyVsRent(args: BuyVsRentArgs) {
+    return buyVsRent(args, this.linkBase);
   }
 
   // ---------------------------------------------------------------- simulate

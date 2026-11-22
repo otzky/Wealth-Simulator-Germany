@@ -145,6 +145,7 @@ export interface YearRow {
   valueStart: number;
   valueEnd: number;
   realValueEnd: number;
+  valueAfterSale: number; // value at the end of the year if everything were sold then, after tax
   dividendsGross: number;
   dividendsNet: number;
   realDividendsNet: number;

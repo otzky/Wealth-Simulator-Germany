@@ -27,7 +27,7 @@ export function createServer(tools: AgentTools, opts: ServerOptions = {}) {
         (opts.remote
           ? 'Ein Plan aus der App lässt sich mit base "link:<Teilen-Link>" übernehmen. Dieser Server speichert nichts. '
           : 'Ein Plan aus der App lässt sich per Teilen-Link übernehmen (plans import_link) oder direkt mit base "link:<Teilen-Link>". ') +
-        'describe erklärt alle Felder. Werte aus "notes" der Person mitteilen. Ergebnisse sind Modellrechnungen, keine Anlageberatung.',
+        'describe erklärt alle Felder. Werte aus "notes" der Person mitteilen. Für die Frage Kaufen oder Mieten gibt es buy_vs_rent. Ergebnisse sind Modellrechnungen, keine Anlageberatung.',
     },
   );
 
@@ -110,6 +110,24 @@ export function createServer(tools: AgentTools, opts: ServerOptions = {}) {
       annotations: ro,
     },
     wrap((a) => tools.compare(a)),
+  );
+
+  server.registerTool(
+    'buy_vs_rent',
+    {
+      title: 'Kaufen oder Mieten',
+      description:
+        'Vergleicht den Kauf einer selbst genutzten Immobilie mit Mieten plus Geldanlage (beide Wege geben monatlich gleich viel aus, die Differenz geht in einen ETF; deutsche Kaufnebenkosten und Steuern). Liefert Gewinner, Vermögen beider Wege am Ende (nominal und Kaufkraft), Break-even-Jahr, Rate, Kaufnebenkosten und Kipppunkte (ab welchem Wert eines Hebels sich die Antwort dreht). Felder in describe unter buy_vs_rent_fields; wichtig sind price, rent, equity, interest. Mit scenarios bis zu 8 Varianten nebeneinander.',
+      inputSchema: {
+        link: z.string().optional().describe('Optional: Teilen-Link aus dem Rechner (…/kaufen-mieten#k=…) als Ausgangspunkt, sonst Standardwerte.'),
+        changes: z.record(z.string(), z.unknown()).optional().describe('Abweichungen, z. B. { "price": 450000, "rent": 1400, "equity": 90000, "interest": 3.8, "state": "NW", "totalReturn": 6 }. Bei scenarios gemeinsam für alle.'),
+        scenarios: z.array(z.object({ name: z.string(), changes: z.record(z.string(), z.unknown()).optional() })).max(8).optional(),
+        detail: z.enum(['summary', 'years']).optional(),
+        tipping_points: z.boolean().optional().describe('Kipppunkte berechnen; Standard: ja bei einer Rechnung, nein bei scenarios.'),
+      },
+      annotations: ro,
+    },
+    wrap((a) => tools.buyVsRent(a)),
   );
 
   if (!opts.remote) {

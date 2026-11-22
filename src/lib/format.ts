@@ -21,7 +21,8 @@ export function formatEuroCompact(v: number): string {
 export function formatAxis(v: number): string {
   const a = Math.abs(v);
   if (a >= 1e6) return `${num.format(round(v / 1e6, 1))} Mio.`;
-  if (a >= 1e3) return `${num.format(Math.round(v / 1e3))} Tsd.`;
+  if (a >= 1e4) return `${num.format(Math.round(v / 1e3))} Tsd.`;
+  if (a >= 1e3) return `${num.format(round(v / 1e3, 1))} Tsd.`;
   return num.format(v);
 }
 

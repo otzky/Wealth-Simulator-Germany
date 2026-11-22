@@ -234,8 +234,18 @@ interface Lot {
  * `inflation` (Monte Carlo only) holds the inflation rate in % for each calendar year of the
  * simulation (index 0 = the start year). Without it every year has the planned inflation.
  * Inflation-adjusted withdrawals rise each January by the inflation of the years since they began.
+ *
+ * `deposits` replaces the savings plan with one deposit per month (index = month of the simulation),
+ * for example the money a tenant has left over compared with a buyer. The start capital and lump
+ * sums still come from `cfg`.
  */
-export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guide?: GuardrailGuide, inflation?: ArrayLike<number>): SimulationResult {
+export function simulate(
+  cfg: SimulationConfig,
+  shocks?: ArrayLike<number>,
+  guide?: GuardrailGuide,
+  inflation?: ArrayLike<number>,
+  deposits?: ArrayLike<number>,
+): SimulationResult {
   const start = parseDate(cfg.startDate);
   const months = horizonMonths(cfg);
   const inflationIn = (year: number) => (inflation && year >= start.y && year - start.y < inflation.length ? inflation[year - start.y] : cfg.inflation);
@@ -510,7 +520,7 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guid
     y.months++;
 
     // 1. Deposits (start of month)
-    let deposit = savings;
+    let deposit = deposits ? Math.max(0, deposits[i] ?? 0) : savings;
     if (i === 0) deposit += cfg.initialCapital;
     if (yearStart) {
       for (const ls of cfg.lumpSums) if (ls.year === year) deposit += ls.amount;
@@ -726,6 +736,7 @@ export function simulate(cfg: SimulationConfig, shocks?: ArrayLike<number>, guid
         valueStart: y.valueStart,
         valueEnd: value,
         realValueEnd: value / deflator,
+        valueAfterSale: value - Math.max(0, (value - costBasis) * (1 - exemption) - allowanceLeft) * taxRate,
         dividendsGross: y.divGross,
         dividendsNet: y.divNet,
         realDividendsNet: y.divNetReal,
