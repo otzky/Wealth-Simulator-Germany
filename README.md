@@ -83,7 +83,7 @@ Vergleicht den Kauf einer selbst genutzten Immobilie mit Mieten plus Geldanlage.
 - Eingaben in Gruppen: Immobilie (Kaufpreis, Wertsteigerung), Kaufnebenkosten (Bundesland, Notar und Grundbuch, Makler), Finanzierung (Eigenkapital, Sollzins, Tilgung, Zinsbindung, Anschlusszins), Instandhaltung, Miete (Kaltmiete, Mietsteigerung), Geldanlage (Rendite, Ausschüttung, Kosten, Fondsart, Kirchensteuer, Sparerpauschbetrag; standardmäßig eingeklappt) sowie Kaufjahr, Zeitraum, Verkaufskosten und Inflation
 - Antwort oben: wer nach dem Zeitraum vorn liegt, um wie viel, und ab welchem Jahr Kaufen dauerhaft vorn liegt (Break-even); daneben das Vermögen beider Wege
 - **Vermögen im Vergleich** als Linien je Jahr, mit Markierungen für Break-even, Ende der Zinsbindung und Abbezahlt
-- **Monatliche Ausgaben** je Jahr als zwei gestapelte Balken: Kaufen (Zinsen, Tilgung, Instandhaltung, Angelegt) und Mieten (Miete, Angelegt)
+- **Wohnkosten pro Monat** je Jahr als zwei Linien: Kaufen (Rate plus Instandhaltung) und Mieten (Kaltmiete). Die Fläche dazwischen ist die Differenz, die die günstigere Seite anlegt; die Aufteilung in Zinsen, Tilgung und Instandhaltung steht im Tooltip
 - **Kipppunkte**: für Wertsteigerung, Rendite der Anlage, Anschlusszins, Sollzins, Kaltmiete, Mietsteigerung, Kaufpreis und Instandhaltung der Wert, ab dem sich die Antwort dreht (jeweils nur dieser Wert geändert). Werte nah am Kipppunkt sind hervorgehoben. Dazu der Kaufpreis in Jahreskaltmieten und der Faktor, bis zu dem sich Kaufen im eigenen Fall lohnt.
 - **Bilanz** beider Wege (nominal) und eine aufklappbare Jahresübersicht
 - Nominal oder in heutiger Kaufkraft, Szenarien im Browser, Teilen-Link (`/kaufen-mieten#k=…`), Export als PDF, PNG und CSV, wie im Vermögens-Simulator

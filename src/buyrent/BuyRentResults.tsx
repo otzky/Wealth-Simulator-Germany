@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, Download } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { formatAxis, formatEuro, formatEuroCompact, formatNumber, formatPercent } from '../lib/format';
 import { LegendItem } from '../components/Charts';
 import { Button, Card, CardHeader, Hint, Segmented, cx } from '../components/ui';
@@ -98,17 +98,14 @@ export default function BuyRentResults({ config: c, result: r, tipping, basis, o
       </Card>
 
       <Card>
-        <CardHeader title="Monatliche Ausgaben" subtitle="Ø je Jahr · beide Wege geben gleich viel aus, wer weniger fürs Wohnen zahlt, legt den Rest an" />
+        <CardHeader title="Wohnkosten pro Monat" subtitle="Ø je Jahr, nominal · die Differenz legt die günstigere Seite an" />
         <div className="px-3 pb-4 sm:px-5">
           <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 px-2 text-xs text-ink-2">
-            <LegendItem color={BUY} label="Zinsen" />
-            <LegendItem color="color-mix(in srgb, var(--series-2) 55%, var(--surface))" label="Tilgung" />
-            <LegendItem color="color-mix(in srgb, var(--series-2) 25%, var(--surface))" label="Instandhaltung" />
-            <LegendItem color={RENT} label="Miete" />
-            <LegendItem color={INVEST} label="Angelegt" />
+            <LegendItem color={BUY} label="Kaufen: Rate + Instandhaltung" variant="line" />
+            <LegendItem color={RENT} label="Mieten: Kaltmiete" variant="line" />
+            <LegendItem color={INVEST} label="Differenz, wird angelegt" />
           </div>
           <BurdenChart result={r} />
-          <p className="px-2 pt-2 text-xs text-muted">Linker Balken je Jahr: Kaufen, rechter Balken: Mieten. Nominal.</p>
         </div>
       </Card>
 
@@ -216,51 +213,53 @@ function WealthCompare({ config: c, result: r, real }: { config: BuyRentConfig; 
 }
 
 function BurdenChart({ result: r }: { result: BuyRentResult }) {
-  const data = r.years.map((y) => ({
-    year: y.year,
-    index: y.index,
-    interest: y.interest / 12,
-    principal: y.principal / 12,
-    maintenance: y.maintenance / 12,
-    buyInvest: y.buyerInvested / 12,
-    rent: y.rent / 12,
-    rentInvest: y.renterInvested / 12,
-  }));
+  type Pt = { year: number; buy: number; rent: number; gap: [number, number]; y: BuyRentYear | null };
+  const pt = (year: number, buy: number, rent: number, y: BuyRentYear | null): Pt => ({ year, buy, rent, gap: [Math.min(buy, rent), Math.max(buy, rent)], y });
+  const data: Pt[] = [];
+  r.years.forEach((y, i) => {
+    const p = pt(y.year, (y.interest + y.principal + y.maintenance) / 12, y.rent / 12, y);
+    const prev = data[data.length - 1];
+    // Where the lines cross between two years, add the exact crossing so the shaded gap closes there.
+    if (i > 0 && prev && Math.sign(prev.buy - prev.rent) * Math.sign(p.buy - p.rent) < 0) {
+      const d0 = prev.buy - prev.rent;
+      const t = d0 / (d0 - (p.buy - p.rent));
+      const v = prev.rent + t * (p.rent - prev.rent);
+      data.push(pt(prev.year + t, v, v, null));
+    }
+    data.push(p);
+  });
   return (
     <div className="h-[300px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }} barGap={1} barCategoryGap="18%">
+        <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke="var(--line)" />
-          <XAxis dataKey="year" tick={axisTick} tickLine={false} axisLine={{ stroke: 'var(--line-strong)' }} minTickGap={24} className="tnum" />
+          <XAxis dataKey="year" type="number" domain={['dataMin', 'dataMax']} allowDecimals={false} tick={axisTick} tickLine={false} axisLine={{ stroke: 'var(--line-strong)' }} minTickGap={24} className="tnum" />
           <YAxis tickFormatter={formatAxis} tick={axisTick} tickLine={false} axisLine={false} width={64} className="tnum" />
           <Tooltip
-            cursor={{ fill: 'var(--surface-2)' }}
+            cursor={{ stroke: 'var(--line-strong)', strokeWidth: 1 }}
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
-              const p = payload[0].payload as (typeof data)[number];
-              const total = p.interest + p.principal + p.maintenance + p.buyInvest;
+              const p = payload[0].payload as Pt;
+              if (!p.y) return null;
+              const diff = p.buy - p.rent;
               return (
                 <TooltipShell title={`${p.year} · Ø pro Monat`}>
-                  <Row color={BUY} label="Zinsen" value={formatEuro(p.interest)} />
-                  <Row color="color-mix(in srgb, var(--series-2) 55%, var(--surface))" label="Tilgung" value={formatEuro(p.principal)} />
-                  <Row color="color-mix(in srgb, var(--series-2) 25%, var(--surface))" label="Instandhaltung" value={formatEuro(p.maintenance)} />
-                  {p.buyInvest > 0.5 && <Row color={INVEST} label="Kaufen: angelegt" value={formatEuro(p.buyInvest)} />}
+                  <Row color={BUY} label="Kaufen" value={formatEuro(p.buy)} strong />
+                  <Row label="Zinsen" value={formatEuro(p.y.interest / 12)} />
+                  <Row label="Tilgung" value={formatEuro(p.y.principal / 12)} />
+                  <Row label="Instandhaltung" value={formatEuro(p.y.maintenance / 12)} />
                   <div className="my-1 border-t border-line" />
-                  <Row color={RENT} label="Miete" value={formatEuro(p.rent)} />
-                  {p.rentInvest > 0.5 && <Row color={INVEST} label="Mieten: angelegt" value={formatEuro(p.rentInvest)} />}
+                  <Row color={RENT} label="Mieten" value={formatEuro(p.rent)} strong />
                   <div className="my-1 border-t border-line" />
-                  <Row label="Je Weg zusammen" value={formatEuro(total)} strong />
+                  <Row color={INVEST} label={diff >= 0 ? 'Mieten legt an' : 'Kaufen legt an'} value={formatEuro(Math.abs(diff))} />
                 </TooltipShell>
               );
             }}
           />
-          <Bar dataKey="interest" stackId="buy" fill={BUY} isAnimationActive={false} />
-          <Bar dataKey="principal" stackId="buy" fill="color-mix(in srgb, var(--series-2) 55%, var(--surface))" isAnimationActive={false} />
-          <Bar dataKey="maintenance" stackId="buy" fill="color-mix(in srgb, var(--series-2) 25%, var(--surface))" isAnimationActive={false} />
-          <Bar dataKey="buyInvest" stackId="buy" fill={INVEST} isAnimationActive={false} />
-          <Bar dataKey="rent" stackId="rent" fill={RENT} isAnimationActive={false} />
-          <Bar dataKey="rentInvest" stackId="rent" fill={INVEST} isAnimationActive={false} />
-        </BarChart>
+          <Area type="linear" dataKey="gap" stroke="none" fill={INVEST} fillOpacity={0.18} isAnimationActive={false} activeDot={false} />
+          <Line type="linear" dataKey="rent" stroke={RENT} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface)', fill: RENT }} />
+          <Line type="linear" dataKey="buy" stroke={BUY} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface)', fill: BUY }} />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
